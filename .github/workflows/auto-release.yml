@@ -1,0 +1,148 @@
+name: Auto Release on Version Change
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'MLVScan.DevCLI.csproj'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (leave empty to use version from .csproj)'
+        required: false
+        type: string
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version-changed: ${{ steps.check.outputs.changed }}
+      new-version: ${{ steps.check.outputs.version }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 2  # Need at least 2 commits to compare
+        
+    - name: Check if version changed
+      id: check
+      run: |
+        # If manually triggered with a version, use that
+        if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
+          echo "Manual trigger with version: ${{ inputs.version }}"
+          echo "changed=true" >> $GITHUB_OUTPUT
+          echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+        
+        # Get current version from .csproj
+        CURRENT_VERSION=$(grep -oP '<Version>\K[^<]+' MLVScan.DevCLI.csproj)
+        echo "Current version: $CURRENT_VERSION"
+        
+        # If manually triggered without version, always use current version
+        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          echo "Manual trigger, using current version: $CURRENT_VERSION"
+          echo "changed=true" >> $GITHUB_OUTPUT
+          echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+        
+        # Get previous version from git
+        git checkout HEAD~1 -- MLVScan.DevCLI.csproj 2>/dev/null || echo "First commit"
+        PREVIOUS_VERSION=$(grep -oP '<Version>\K[^<]+' MLVScan.DevCLI.csproj 2>/dev/null || echo "0.0.0")
+        echo "Previous version: $PREVIOUS_VERSION"
+        
+        # Restore current version
+        git checkout HEAD -- MLVScan.DevCLI.csproj
+        
+        # Compare versions
+        if [ "$CURRENT_VERSION" != "$PREVIOUS_VERSION" ]; then
+          echo "Version changed from $PREVIOUS_VERSION to $CURRENT_VERSION"
+          echo "changed=true" >> $GITHUB_OUTPUT
+          echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+        else
+          echo "Version unchanged"
+          echo "changed=false" >> $GITHUB_OUTPUT
+          echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+        fi
+
+  create-release:
+    needs: check-version
+    if: needs.check-version.outputs.version-changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+         
+    - name: Generate Release Notes
+      id: release_notes
+      run: |
+        VERSION="${{ needs.check-version.outputs.new-version }}"
+        
+        # Get commits since last tag
+        LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+        
+        if [ -n "$LAST_TAG" ]; then
+          COMMITS=$(git log $LAST_TAG..HEAD --pretty=format:"- %s (%h)" --no-merges)
+        else
+          COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges -n 10)
+        fi
+        
+        # Create release notes
+        cat > release_notes.md << EOF
+        ## MLVScan.DevCLI v$VERSION
+        
+        ### Changes
+        
+        $COMMITS
+        
+        ### Installation
+        
+        \`\`\`bash
+        dotnet tool install -g MLVScan.DevCLI --version $VERSION
+        \`\`\`
+        
+        Or update existing installation:
+        
+        \`\`\`bash
+        dotnet tool update -g MLVScan.DevCLI --version $VERSION
+        \`\`\`
+        
+        ### NuGet Package
+        
+        This release is available on NuGet: https://www.nuget.org/packages/MLVScan.DevCLI/$VERSION
+        
+        ---
+        
+        **Full Changelog**: https://github.com/${{ github.repository }}/compare/$LAST_TAG...v$VERSION
+        EOF
+        
+        echo "Release notes generated"
+        
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: v${{ needs.check-version.outputs.new-version }}
+        name: MLVScan.DevCLI v${{ needs.check-version.outputs.new-version }}
+        body_path: release_notes.md
+        draft: false
+        prerelease: false
+        make_latest: true
+        
+    - name: Summary
+      run: |
+        echo "### ✅ Release Created Successfully" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Version:** v${{ needs.check-version.outputs.new-version }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Tag:** v${{ needs.check-version.outputs.new-version }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "The NuGet publish workflow will be triggered automatically." >> $GITHUB_STEP_SUMMARY
