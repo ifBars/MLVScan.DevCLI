@@ -17,6 +17,20 @@ dotnet new tool-manifest  # if you don't have one already
 dotnet tool install MLVScan.DevCLI
 ```
 
+## Updating
+
+If installed as a global .NET tool:
+
+```bash
+dotnet tool update --global MLVScan.DevCLI
+```
+
+Or if installed locally in your project:
+
+```bash
+dotnet tool update MLVScan.DevCLI
+```
+
 ## Usage
 
 ### Basic Scan
@@ -54,6 +68,8 @@ mlvscan-dev MyMod.dll --verbose
 ## MSBuild Integration
 
 Add MLVScan checks to your build process by adding this to your `.csproj`:
+
+Note: The output of the DevCLI may be hidden when using the dotnet CLI. Use an IDE like Visual Studio or Rider to see the full output of the DevCLI.
 
 ### Option 1: Post-Build Check (Recommended for Development)
 
