@@ -5,31 +5,30 @@ using MLVScan.DevCLI;
 using MLVScan.Models;
 using MLVScan.Services;
 
-var rootCommand = new RootCommand("MLVScan Developer CLI - Scan MelonLoader mods during development");
-
 var assemblyPathArgument = new Argument<FileInfo>(
-    name: "assembly-path",
-    description: "Path to the .dll file to scan")
-{
-    Arity = ArgumentArity.ExactlyOne
-};
+    "assembly-path",
+    "Path to the .dll file to scan");
 
 var jsonOption = new Option<bool>(
-    aliases: new[] { "--json", "-j" },
-    description: "Output results as JSON (useful for CI/CD pipelines)");
+    "--json",
+    "Output results as JSON (useful for CI/CD pipelines)");
+jsonOption.AddAlias("-j");
 
 var failOnOption = new Option<string?>(
-    aliases: new[] { "--fail-on", "-f" },
-    description: "Exit with error code 1 if findings >= specified severity (Low/Medium/High/Critical)");
+    "--fail-on",
+    "Exit with error code 1 if findings >= specified severity (Low/Medium/High/Critical)");
+failOnOption.AddAlias("-f");
 
 var verboseOption = new Option<bool>(
-    aliases: new[] { "--verbose", "-v" },
-    description: "Show all findings, not just those with developer guidance");
+    "--verbose",
+    "Show all findings, not just those with developer guidance");
+verboseOption.AddAlias("-v");
 
-rootCommand.AddArgument(assemblyPathArgument);
-rootCommand.AddOption(jsonOption);
-rootCommand.AddOption(failOnOption);
-rootCommand.AddOption(verboseOption);
+var rootCommand = new RootCommand("MLVScan Developer CLI - Scan MelonLoader mods during development");
+rootCommand.Add(assemblyPathArgument);
+rootCommand.Add(jsonOption);
+rootCommand.Add(failOnOption);
+rootCommand.Add(verboseOption);
 
 rootCommand.SetHandler((FileInfo assemblyPath, bool json, string? failOn, bool verbose) =>
 {
