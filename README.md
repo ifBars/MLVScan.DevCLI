@@ -17,6 +17,30 @@ dotnet new tool-manifest  # if you don't have one already
 dotnet tool install MLVScan.DevCLI
 ```
 
+## Building from Source
+
+The DevCLI can be built using either the published NuGet package (default) or a local copy of MLVScan.Core for development.
+
+### Default Build (NuGet Package)
+
+By default, the build uses the published `MLVScan.Core` package from NuGet:
+
+```bash
+dotnet build -c Release
+```
+
+### Local Development Build
+
+To use a local copy of MLVScan.Core (e.g., when developing new features or testing changes):
+
+```bash
+dotnet build -c Release -p:LocalCoreBuild=true
+```
+
+This switches the reference from the NuGet package to a local project reference at `../MLVScan.Core/MLVScan.Core.csproj`.
+
+**Note:** The NuGet package build requires a published version of MLVScan.Core that includes the DTOs (v1.1.5+). Until then, use `-p:LocalCoreBuild=true` for local development.
+
 ## Updating
 
 If installed as a global .NET tool:
@@ -43,11 +67,19 @@ mlvscan-dev MyMod.dll
 
 ### JSON Output (for CI/CD)
 
-Get machine-readable JSON output:
+Get machine-readable JSON output in legacy format:
 
 ```bash
 mlvscan-dev MyMod.dll --json
 ```
+
+Or use the new standardized schema format (recommended):
+
+```bash
+mlvscan-dev MyMod.dll --format schema
+```
+
+The schema format follows MLVScan Schema v1.0.0, which is compatible with the web UI and other MLVScan tools.
 
 ### Fail Build on High Severity
 
@@ -91,9 +123,11 @@ Note: The output of the DevCLI may be hidden when using the dotnet CLI. Use an I
 
 ```xml
 <Target Name="MLVScanCheck" AfterTargets="Build">
-  <Exec Command="dotnet mlvscan-dev $(TargetPath) --json > mlvscan-report.json" />
+  <Exec Command="dotnet mlvscan-dev $(TargetPath) --format schema > mlvscan-report.json" />
 </Target>
 ```
+
+Note: Use `--format schema` for the standardized output format, or `--json` for the legacy format.
 
 ## Complete Example Project Configuration
 
@@ -143,7 +177,8 @@ Arguments:
   <assembly-path>  Path to the .dll file to scan
 
 Options:
-  -j, --json              Output results as JSON (useful for CI/CD pipelines)
+  -o, --format <format>   Output format: console (default), json (legacy), schema (MLVScan Schema v1.0.0)
+  -j, --json              Output results as JSON (legacy format, use --format schema for new format)
   -f, --fail-on <value>   Exit with error code 1 if findings >= severity (Low/Medium/High/Critical)
   -v, --verbose           Show all findings, not just those with developer guidance
   -h, --help              Show help information
@@ -176,7 +211,7 @@ Findings: 2
 ─────────────────────────────────────────
 ```
 
-### JSON Output
+### JSON Output (Legacy)
 
 ```json
 {
@@ -199,6 +234,55 @@ Findings: 2
   ]
 }
 ```
+
+### Schema Output (New, Recommended)
+
+Using `--format schema` outputs the standardized MLVScan Schema v1.0.0 format:
+
+```json
+{
+  "schemaVersion": "1.0.0",
+  "metadata": {
+    "scannerVersion": "1.1.5",
+    "timestamp": "2026-01-29T12:34:56.789Z",
+    "scanMode": "developer",
+    "platform": "cli"
+  },
+  "input": {
+    "fileName": "MyMod.dll",
+    "sizeBytes": 45678,
+    "sha256Hash": "a1b2c3d4..."
+  },
+  "summary": {
+    "totalFindings": 2,
+    "countBySeverity": {
+      "High": 2
+    },
+    "triggeredRules": ["PersistenceRule"]
+  },
+  "findings": [
+    {
+      "id": "f1a2b3c4d5e6",
+      "ruleId": "PersistenceRule",
+      "description": "Detected executable write near persistence-prone directory",
+      "severity": "High",
+      "location": "MyMod.SaveManager.SaveSettings:42",
+      "codeSnippet": "..."
+    }
+  ],
+  "developerGuidance": [
+    {
+      "ruleId": "PersistenceRule",
+      "remediation": "For mod settings, use MelonPreferences...",
+      "documentationUrl": "https://melonwiki.xyz/#/modders/preferences",
+      "alternativeApis": ["MelonPreferences.CreateEntry<T>"],
+      "isRemediable": true
+    }
+  ]
+}
+```
+
+This format is compatible with the MLVScan web UI and other ecosystem tools.
 
 ## CI/CD Integration Examples
 

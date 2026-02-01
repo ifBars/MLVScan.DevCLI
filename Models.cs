@@ -1,5 +1,10 @@
 namespace MLVScan.DevCLI;
 
+/// <summary>
+/// Simple scan result model for legacy JSON output format.
+/// Used by the --json flag for backward compatibility.
+/// For new code, use the schema-compliant DTOs from MLVScan.Models.Dto.
+/// </summary>
 public class DevScanResult
 {
     public string AssemblyName { get; set; } = string.Empty;

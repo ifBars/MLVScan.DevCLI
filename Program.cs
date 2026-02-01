@@ -1,17 +1,26 @@
 using System.CommandLine;
+using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using MLVScan;
 using MLVScan.DevCLI;
 using MLVScan.Models;
+using MLVScan.Models.Dto;
 using MLVScan.Services;
 
 var assemblyPathArgument = new Argument<FileInfo>(
     "assembly-path",
     "Path to the .dll file to scan");
 
+var formatOption = new Option<string>(
+    "--format",
+    () => "console",
+    "Output format: console (default), json (legacy), schema (new schema v1.0.0)");
+formatOption.AddAlias("-o");
+
 var jsonOption = new Option<bool>(
     "--json",
-    "Output results as JSON (useful for CI/CD pipelines)");
+    "Output results as JSON (legacy format, use --format schema for new format)");
 jsonOption.AddAlias("-j");
 
 var failOnOption = new Option<string?>(
@@ -26,19 +35,26 @@ verboseOption.AddAlias("-v");
 
 var rootCommand = new RootCommand("MLVScan Developer CLI - Scan MelonLoader mods during development");
 rootCommand.Add(assemblyPathArgument);
+rootCommand.Add(formatOption);
 rootCommand.Add(jsonOption);
 rootCommand.Add(failOnOption);
 rootCommand.Add(verboseOption);
 
-rootCommand.SetHandler((FileInfo assemblyPath, bool json, string? failOn, bool verbose) =>
+rootCommand.SetHandler((FileInfo assemblyPath, string format, bool json, string? failOn, bool verbose) =>
 {
-    var exitCode = ScanAssembly(assemblyPath, json, failOn, verbose);
+    // Handle legacy --json flag
+    if (json && format == "console")
+    {
+        format = "json";
+    }
+    
+    var exitCode = ScanAssembly(assemblyPath, format, failOn, verbose);
     Environment.Exit(exitCode);
-}, assemblyPathArgument, jsonOption, failOnOption, verboseOption);
+}, assemblyPathArgument, formatOption, jsonOption, failOnOption, verboseOption);
 
 return await rootCommand.InvokeAsync(args);
 
-static int ScanAssembly(FileInfo assemblyPath, bool json, string? failOn, bool verbose)
+static int ScanAssembly(FileInfo assemblyPath, string format, string? failOn, bool verbose)
 {
     if (!assemblyPath.Exists)
     {
@@ -61,13 +77,19 @@ static int ScanAssembly(FileInfo assemblyPath, bool json, string? failOn, bool v
             ? findings
             : findings.Where(f => f.DeveloperGuidance != null).ToList();
 
-        if (json)
+        // Output based on format
+        switch (format.ToLower())
         {
-            OutputJson(assemblyPath.Name, displayFindings);
-        }
-        else
-        {
-            OutputConsole(assemblyPath.Name, displayFindings, verbose);
+            case "schema":
+                OutputSchema(assemblyPath, findings, config);
+                break;
+            case "json":
+                OutputJson(assemblyPath.Name, displayFindings);
+                break;
+            case "console":
+            default:
+                OutputConsole(assemblyPath.Name, displayFindings, verbose);
+                break;
         }
 
         // Check if we should fail based on severity
@@ -76,7 +98,7 @@ static int ScanAssembly(FileInfo assemblyPath, bool json, string? failOn, bool v
             var failSeverity = ParseSeverity(failOn);
             if (failSeverity.HasValue && findings.Any(f => f.Severity >= failSeverity.Value))
             {
-                if (!json)
+                if (format == "console")
                 {
                     Console.Error.WriteLine();
                     Console.Error.WriteLine($"Build failed: Found {findings.Count(f => f.Severity >= failSeverity.Value)} finding(s) >= {failSeverity.Value}");
@@ -96,6 +118,27 @@ static int ScanAssembly(FileInfo assemblyPath, bool json, string? failOn, bool v
         }
         return 1;
     }
+}
+
+static void OutputSchema(FileInfo assemblyPath, List<ScanFinding> findings, ScanConfig config)
+{
+    // Read file bytes for SHA256 hash
+    byte[] assemblyBytes = File.ReadAllBytes(assemblyPath.FullName);
+    
+    // Use shared mapper from MLVScan.Core with CLI-specific options
+    var options = ScanResultOptions.ForCli(config.DeveloperMode);
+    options.PlatformVersion = "1.0.2";
+    var result = ScanResultMapper.ToDto(findings, assemblyPath.Name, assemblyBytes, options);
+    
+    // Serialize with indentation for readability
+    var jsonOptions = new JsonSerializerOptions
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
+
+    Console.WriteLine(JsonSerializer.Serialize(result, jsonOptions));
 }
 
 static void OutputConsole(string assemblyName, List<ScanFinding> findings, bool verbose)
@@ -162,14 +205,49 @@ static void OutputConsole(string assemblyName, List<ScanFinding> findings, bool 
         }
 
         Console.WriteLine();
-        Console.WriteLine("  Locations:");
-        foreach (var finding in ruleGroup.Take(3))
+        
+        // Show call chain if available
+        if (firstFinding.HasCallChain)
         {
-            Console.WriteLine($"    • {finding.Location}");
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine("  Call Chain (Attack Path):");
+            Console.ResetColor();
+            
+            foreach (var node in firstFinding.CallChain!.Nodes)
+            {
+                var indent = node.NodeType switch
+                {
+                    CallChainNodeType.EntryPoint => "    ",
+                    CallChainNodeType.IntermediateCall => "      → ",
+                    CallChainNodeType.SuspiciousDeclaration => "        → ",
+                    _ => "    "
+                };
+                
+                var nodeTypeLabel = node.NodeType switch
+                {
+                    CallChainNodeType.EntryPoint => "[ENTRY]",
+                    CallChainNodeType.IntermediateCall => "[CALL]",
+                    CallChainNodeType.SuspiciousDeclaration => "[DECL]",
+                    _ => "[???]"
+                };
+                
+                Console.WriteLine($"{indent}{nodeTypeLabel} {node.Location}");
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.WriteLine($"{indent}        {node.Description}");
+                Console.ResetColor();
+            }
         }
-        if (count > 3)
+        else
         {
-            Console.WriteLine($"    ... and {count - 3} more");
+            Console.WriteLine("  Locations:");
+            foreach (var finding in ruleGroup.Take(3))
+            {
+                Console.WriteLine($"    • {finding.Location}");
+            }
+            if (count > 3)
+            {
+                Console.WriteLine($"    ... and {count - 3} more");
+            }
         }
 
         Console.WriteLine();

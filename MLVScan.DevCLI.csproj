@@ -10,7 +10,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>mlvscan-dev</ToolCommandName>
     <PackageId>MLVScan.DevCLI</PackageId>
-    <Version>1.0.1</Version>
+    <Version>1.0.2</Version>
     <Authors>Bars</Authors>
     <Description>Developer CLI tool for MLVScan - scan MelonLoader mods during development with remediation guidance</Description>
     <PackageTags>melonloader;security;malware;scanner;developer;cli</PackageTags>
@@ -26,8 +26,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="MLVScan.Core" Version="*" />
     <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
+    
+    <!-- MLVScan.Core: Use NuGet package by default, or local project reference when LocalCoreBuild is set -->
+    <PackageReference Include="MLVScan.Core" Version="*" Condition="'$(LocalCoreBuild)' != 'true'" />
+    <ProjectReference Include="..\MLVScan.Core\MLVScan.Core.csproj" Condition="'$(LocalCoreBuild)' == 'true'" />
   </ItemGroup>
 
   <ItemGroup>
