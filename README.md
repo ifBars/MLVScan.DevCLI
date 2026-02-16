@@ -389,4 +389,4 @@ A: Yes! The tool works on compiled DLLs and doesn't require source code access.
 
 ## License
 
-MIT License - See LICENSE file for details
+GPL-3.0 License - See [LICENSE] file for details
