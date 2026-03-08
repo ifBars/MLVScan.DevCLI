@@ -1,6 +1,6 @@
 # MLVScan.DevCLI
 
-Developer CLI tool for MLVScan - scan MelonLoader mods during development with remediation guidance.
+Developer CLI tool for MLVScan - scan .NET mod assemblies during development with remediation guidance and known malware family verdicts.
 
 ## Installation
 
@@ -79,7 +79,7 @@ Or use the new standardized schema format (recommended):
 mlvscan-dev MyMod.dll --format schema
 ```
 
-The schema format follows MLVScan Schema v1.0.0, which is compatible with the web UI and other MLVScan tools.
+The schema format follows MLVScan Schema v1.0.0, which is compatible with the web UI and other MLVScan tools, including threat family matches when a sample maps to a known malware cluster.
 
 ### Fail Build on High Severity
 
@@ -195,6 +195,13 @@ MLVScan Developer Report
 Assembly: MyMod.dll
 Findings: 2
 
+Known malware family match
+Family: Embedded resource ShellExecute temp CMD dropper
+Match: BehaviorVariant
+Confidence: 99%
+Summary: Embedded payload materialized to a temporary .cmd file and launched with hidden native shell execution.
+Matched Rules: DllImportRule
+
 [High] Detected executable write near persistence-prone directory
   Rule: PersistenceRule
   Occurrences: 1
@@ -260,6 +267,25 @@ Using `--format schema` outputs the standardized MLVScan Schema v1.0.0 format:
     },
     "triggeredRules": ["PersistenceRule"]
   },
+  "threatFamilies": [
+    {
+      "familyId": "family-resource-shell32-tempcmd-v1",
+      "variantId": "resource-shell32-tempcmd-hidden",
+      "displayName": "Embedded resource ShellExecute temp CMD dropper",
+      "summary": "Embedded payload materialized to a temporary .cmd file and launched with hidden native shell execution.",
+      "matchKind": "BehaviorVariant",
+      "confidence": 0.99,
+      "exactHashMatch": false,
+      "matchedRules": ["DllImportRule"],
+      "advisorySlugs": ["2025-12-malware-customtv-il2cpp"],
+      "evidence": [
+        {
+          "kind": "api",
+          "value": "ShellExecuteEx"
+        }
+      ]
+    }
+  ],
   "findings": [
     {
       "id": "f1a2b3c4d5e6",

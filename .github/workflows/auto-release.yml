@@ -14,6 +14,10 @@ on:
         required: false
         type: string
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check-version:
     runs-on: ubuntu-latest
@@ -23,7 +27,7 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         fetch-depth: 2  # Need at least 2 commits to compare
         
@@ -75,11 +79,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      actions: write
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         fetch-depth: 0
          

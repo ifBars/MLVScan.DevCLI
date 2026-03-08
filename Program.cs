@@ -1,5 +1,5 @@
 using System.CommandLine;
-using System.Security.Cryptography;
+using System.Collections;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using MLVScan;
@@ -64,6 +64,8 @@ static int ScanAssembly(FileInfo assemblyPath, string format, string? failOn, bo
 
     try
     {
+        byte[] assemblyBytes = File.ReadAllBytes(assemblyPath.FullName);
+
         // Create scanner with developer mode enabled
         var config = new ScanConfig { DeveloperMode = true };
         var rules = RuleFactory.CreateDefaultRules();
@@ -77,18 +79,22 @@ static int ScanAssembly(FileInfo assemblyPath, string format, string? failOn, bo
             ? findings
             : findings.Where(f => f.DeveloperGuidance != null).ToList();
 
+        var options = ScanResultOptions.ForCli(config.DeveloperMode);
+        options.PlatformVersion = "1.0.2";
+        var schemaResult = ScanResultMapper.ToDto(findings, assemblyPath.Name, assemblyBytes, options);
+
         // Output based on format
         switch (format.ToLower())
         {
             case "schema":
-                OutputSchema(assemblyPath, findings, config);
+                OutputSchema(schemaResult);
                 break;
             case "json":
                 OutputJson(assemblyPath.Name, displayFindings);
                 break;
             case "console":
             default:
-                OutputConsole(assemblyPath.Name, displayFindings, verbose);
+                OutputConsole(assemblyPath.Name, displayFindings, schemaResult, verbose);
                 break;
         }
 
@@ -120,16 +126,8 @@ static int ScanAssembly(FileInfo assemblyPath, string format, string? failOn, bo
     }
 }
 
-static void OutputSchema(FileInfo assemblyPath, List<ScanFinding> findings, ScanConfig config)
+static void OutputSchema(ScanResultDto result)
 {
-    // Read file bytes for SHA256 hash
-    byte[] assemblyBytes = File.ReadAllBytes(assemblyPath.FullName);
-    
-    // Use shared mapper from MLVScan.Core with CLI-specific options
-    var options = ScanResultOptions.ForCli(config.DeveloperMode);
-    options.PlatformVersion = "1.0.2";
-    var result = ScanResultMapper.ToDto(findings, assemblyPath.Name, assemblyBytes, options);
-    
     // Serialize with indentation for readability
     var jsonOptions = new JsonSerializerOptions
     {
@@ -141,13 +139,15 @@ static void OutputSchema(FileInfo assemblyPath, List<ScanFinding> findings, Scan
     Console.WriteLine(JsonSerializer.Serialize(result, jsonOptions));
 }
 
-static void OutputConsole(string assemblyName, List<ScanFinding> findings, bool verbose)
+static void OutputConsole(string assemblyName, List<ScanFinding> findings, ScanResultDto schemaResult, bool verbose)
 {
     Console.WriteLine("MLVScan Developer Report");
     Console.WriteLine("========================");
     Console.WriteLine($"Assembly: {assemblyName}");
     Console.WriteLine($"Findings: {findings.Count}");
     Console.WriteLine();
+
+    OutputThreatFamilySummary(schemaResult);
 
     if (findings.Count == 0)
     {
@@ -256,6 +256,141 @@ static void OutputConsole(string assemblyName, List<ScanFinding> findings, bool 
     }
 }
 
+static void OutputThreatFamilySummary(ScanResultDto schemaResult)
+{
+    var threatFamilies = GetThreatFamilies(schemaResult);
+    if (threatFamilies.Count == 0)
+    {
+        return;
+    }
+
+    var primary = threatFamilies
+        .OrderByDescending(f => f.ExactHashMatch)
+        .ThenByDescending(f => f.Confidence)
+        .ThenBy(f => f.FamilyId, StringComparer.Ordinal)
+        .First();
+
+    var verdict = primary.ExactHashMatch ? "Known malicious sample match" : "Known malware family match";
+
+    Console.ForegroundColor = ConsoleColor.Red;
+    Console.WriteLine(verdict);
+    Console.ResetColor();
+    Console.WriteLine($"Family: {primary.DisplayName}");
+    Console.WriteLine($"Match: {primary.MatchKind}");
+    Console.WriteLine($"Confidence: {primary.Confidence:P0}");
+
+    if (!string.IsNullOrWhiteSpace(primary.Summary))
+    {
+        Console.WriteLine($"Summary: {primary.Summary}");
+    }
+
+    if (primary.MatchedRules.Count > 0)
+    {
+        Console.WriteLine($"Matched Rules: {string.Join(", ", primary.MatchedRules)}");
+    }
+
+    if (primary.Evidence.Count > 0)
+    {
+        Console.WriteLine("Evidence:");
+        foreach (var evidence in primary.Evidence.Take(4))
+        {
+            Console.WriteLine($"  - {evidence}");
+        }
+    }
+
+    if (primary.AdvisorySlugs.Count > 0)
+    {
+        Console.WriteLine($"Advisories: {string.Join(", ", primary.AdvisorySlugs)}");
+    }
+
+    Console.WriteLine();
+}
+
+static List<ThreatFamilyConsoleView> GetThreatFamilies(ScanResultDto schemaResult)
+{
+    var property = schemaResult.GetType().GetProperty("ThreatFamilies");
+    if (property?.GetValue(schemaResult) is not IEnumerable rawFamilies)
+    {
+        return new List<ThreatFamilyConsoleView>();
+    }
+
+    var results = new List<ThreatFamilyConsoleView>();
+    foreach (var rawFamily in rawFamilies)
+    {
+        if (rawFamily == null)
+        {
+            continue;
+        }
+
+        results.Add(new ThreatFamilyConsoleView
+        {
+            FamilyId = GetStringProperty(rawFamily, "FamilyId"),
+            DisplayName = GetStringProperty(rawFamily, "DisplayName"),
+            Summary = GetStringProperty(rawFamily, "Summary"),
+            MatchKind = GetStringProperty(rawFamily, "MatchKind"),
+            Confidence = GetDoubleProperty(rawFamily, "Confidence"),
+            ExactHashMatch = GetBoolProperty(rawFamily, "ExactHashMatch"),
+            MatchedRules = GetStringListProperty(rawFamily, "MatchedRules"),
+            AdvisorySlugs = GetStringListProperty(rawFamily, "AdvisorySlugs"),
+            Evidence = GetEvidenceProperty(rawFamily, "Evidence")
+        });
+    }
+
+    return results;
+}
+
+static string GetStringProperty(object target, string propertyName)
+{
+    return target.GetType().GetProperty(propertyName)?.GetValue(target) as string ?? string.Empty;
+}
+
+static double GetDoubleProperty(object target, string propertyName)
+{
+    return target.GetType().GetProperty(propertyName)?.GetValue(target) is double value ? value : 0d;
+}
+
+static bool GetBoolProperty(object target, string propertyName)
+{
+    return target.GetType().GetProperty(propertyName)?.GetValue(target) is bool value && value;
+}
+
+static List<string> GetStringListProperty(object target, string propertyName)
+{
+    if (target.GetType().GetProperty(propertyName)?.GetValue(target) is not IEnumerable values)
+    {
+        return new List<string>();
+    }
+
+    return values.Cast<object?>()
+        .Select(value => value?.ToString())
+        .Where(value => !string.IsNullOrWhiteSpace(value))
+        .Cast<string>()
+        .ToList();
+}
+
+static List<string> GetEvidenceProperty(object target, string propertyName)
+{
+    if (target.GetType().GetProperty(propertyName)?.GetValue(target) is not IEnumerable values)
+    {
+        return new List<string>();
+    }
+
+    var results = new List<string>();
+    foreach (var value in values)
+    {
+        if (value == null)
+        {
+            continue;
+        }
+
+        var kind = GetStringProperty(value, "Kind");
+        var content = GetStringProperty(value, "Value");
+        results.Add(string.IsNullOrWhiteSpace(kind) ? content : $"{kind}: {content}");
+    }
+
+    return results;
+}
+
 static void OutputJson(string assemblyName, List<ScanFinding> findings)
 {
     var result = new DevScanResult
@@ -298,5 +433,18 @@ static Severity? ParseSeverity(string severity)
         "critical" => Severity.Critical,
         _ => null
     };
+}
+
+sealed class ThreatFamilyConsoleView
+{
+    public string FamilyId { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string Summary { get; set; } = string.Empty;
+    public string MatchKind { get; set; } = string.Empty;
+    public double Confidence { get; set; }
+    public bool ExactHashMatch { get; set; }
+    public List<string> MatchedRules { get; set; } = new();
+    public List<string> AdvisorySlugs { get; set; } = new();
+    public List<string> Evidence { get; set; } = new();
 }
 

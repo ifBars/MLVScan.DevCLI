@@ -3,23 +3,21 @@ name: Publish to NuGet
 on:
   release:
     types: [published]
-  workflow_run:
-    workflows: ["Auto Release on Version Change"]
-    types:
-      - completed
   workflow_dispatch:  # Allow manual triggering
 
 jobs:
   publish:
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'release' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'release' }}
+    permissions:
+      contents: read
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       
     - name: Setup .NET
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@v5
       with:
         dotnet-version: '8.0.x'
         
@@ -28,10 +26,6 @@ jobs:
       
     - name: Build
       run: dotnet build MLVScan.DevCLI.csproj -c Release --no-restore
-      
-    - name: Run tests (if any)
-      run: dotnet test MLVScan.DevCLI.csproj -c Release --no-build --verbosity normal
-      continue-on-error: true  # Continue even if no tests exist
       
     - name: Extract version from release
       id: get_version
@@ -60,7 +54,7 @@ jobs:
         NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         
     - name: Upload package as artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: nuget-package
         path: ./nupkg/*.nupkg
