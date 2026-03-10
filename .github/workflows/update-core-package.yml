@@ -1,0 +1,46 @@
+name: Update MLVScan.Core
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Update MLVScan.Core package
+        run: dotnet add MLVScan.DevCLI.csproj package MLVScan.Core
+
+      - name: Restore dependencies
+        run: dotnet restore MLVScan.DevCLI.csproj
+
+      - name: Build DevCLI
+        run: dotnet build MLVScan.DevCLI.csproj -c Release --no-restore
+
+      - name: Pack DevCLI
+        run: dotnet pack MLVScan.DevCLI.csproj -c Release --no-build
+
+      - name: Commit and push if updated
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet MLVScan.DevCLI.csproj; then
+            echo "No updates available"
+          else
+            git add MLVScan.DevCLI.csproj
+            git commit -m "chore(deps): update MLVScan.Core"
+            git push
+          fi
