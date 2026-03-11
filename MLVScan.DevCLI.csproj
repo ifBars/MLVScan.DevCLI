@@ -29,7 +29,7 @@
     <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
     
     <!-- MLVScan.Core: Use NuGet package by default, or local project reference when LocalCoreBuild is set -->
-    <PackageReference Include="MLVScan.Core" Version="1.2.8" Condition="'$(LocalCoreBuild)' != 'true'" />
+    <PackageReference Include="MLVScan.Core" Version="1.2.9" Condition="'$(LocalCoreBuild)' != 'true'" />
     <ProjectReference Include="..\MLVScan.Core\MLVScan.Core.csproj" Condition="'$(LocalCoreBuild)' == 'true'" />
   </ItemGroup>
 
