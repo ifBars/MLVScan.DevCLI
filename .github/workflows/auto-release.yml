@@ -175,44 +175,38 @@ jobs:
           fi
 
           cat > release_notes.md <<EOF
-          ## MLVScan.DevCLI v$VERSION
-
-          ### Highlights
-
-          - Standalone Windows binary release asset for desktop integrations (`mlvscan-win-x64.zip`)
-          - Stable CLI command name: `mlvscan`
-          - Machine-readable metadata via `mlvscan info --format json`
+          ## MLVScan.DevCLI v${VERSION}
 
           ### Changes
 
-          $COMMITS
+          ${COMMITS}
 
           ### Installation
 
           **Standalone binary**
 
-          - Download `mlvscan-win-x64.zip` from this release
-          - Extract and run `mlvscan.exe info --format json` to verify the install
+          - Download \`mlvscan-win-x64.zip\` from this release
+          - Extract and run \`mlvscan.exe info --format json\` to verify the install
 
           **NuGet tool**
 
-          ```bash
-          dotnet tool install -g MLVScan.DevCLI --version $VERSION
-          ```
+          \`\`\`bash
+          dotnet tool install -g MLVScan.DevCLI --version ${VERSION}
+          \`\`\`
 
           Or update an existing installation:
 
-          ```bash
-          dotnet tool update -g MLVScan.DevCLI --version $VERSION
-          ```
+          \`\`\`bash
+          dotnet tool update -g MLVScan.DevCLI --version ${VERSION}
+          \`\`\`
 
           ### NuGet Package
 
-          This release is available on NuGet: https://www.nuget.org/packages/MLVScan.DevCLI/$VERSION
+          This release is available on NuGet: https://www.nuget.org/packages/MLVScan.DevCLI/${VERSION}
 
           ---
 
-          **Full Changelog**: $CHANGELOG_URL
+          **Full Changelog**: ${CHANGELOG_URL}
           EOF
 
       - name: Create GitHub release
