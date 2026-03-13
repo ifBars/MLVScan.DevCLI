@@ -24,129 +24,216 @@ jobs:
     outputs:
       version-changed: ${{ steps.check.outputs.changed }}
       new-version: ${{ steps.check.outputs.version }}
-    
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v6
-      with:
-        fetch-depth: 2  # Need at least 2 commits to compare
-        
-    - name: Check if version changed
-      id: check
-      run: |
-        # If manually triggered with a version, use that
-        if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
-          echo "Manual trigger with version: ${{ inputs.version }}"
-          echo "changed=true" >> $GITHUB_OUTPUT
-          echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
-          exit 0
-        fi
-        
-        # Get current version from .csproj
-        CURRENT_VERSION=$(grep -oP '<Version>\K[^<]+' MLVScan.DevCLI.csproj)
-        echo "Current version: $CURRENT_VERSION"
-        
-        # If manually triggered without version, always use current version
-        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-          echo "Manual trigger, using current version: $CURRENT_VERSION"
-          echo "changed=true" >> $GITHUB_OUTPUT
-          echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
-          exit 0
-        fi
-        
-        # Get previous version from git
-        git checkout HEAD~1 -- MLVScan.DevCLI.csproj 2>/dev/null || echo "First commit"
-        PREVIOUS_VERSION=$(grep -oP '<Version>\K[^<]+' MLVScan.DevCLI.csproj 2>/dev/null || echo "0.0.0")
-        echo "Previous version: $PREVIOUS_VERSION"
-        
-        # Restore current version
-        git checkout HEAD -- MLVScan.DevCLI.csproj
-        
-        # Compare versions
-        if [ "$CURRENT_VERSION" != "$PREVIOUS_VERSION" ]; then
-          echo "Version changed from $PREVIOUS_VERSION to $CURRENT_VERSION"
-          echo "changed=true" >> $GITHUB_OUTPUT
-          echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
-        else
-          echo "Version unchanged"
-          echo "changed=false" >> $GITHUB_OUTPUT
-          echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
-        fi
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+
+      - name: Check if version changed
+        id: check
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CURRENT_VERSION=$(grep -oP '<Version>\K[^<]+' MLVScan.DevCLI.csproj)
+          echo "Current version: $CURRENT_VERSION"
+
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "version=$CURRENT_VERSION" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git checkout HEAD~1 -- MLVScan.DevCLI.csproj 2>/dev/null || echo "First commit"
+          PREVIOUS_VERSION=$(grep -oP '<Version>\K[^<]+' MLVScan.DevCLI.csproj 2>/dev/null || echo "0.0.0")
+          git checkout HEAD -- MLVScan.DevCLI.csproj
+
+          if [ "$CURRENT_VERSION" != "$PREVIOUS_VERSION" ]; then
+            echo "Version changed from $PREVIOUS_VERSION to $CURRENT_VERSION"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Version unchanged"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "version=$CURRENT_VERSION" >> "$GITHUB_OUTPUT"
+
+  build-windows-binary:
+    needs: check-version
+    if: needs.check-version.outputs.version-changed == 'true'
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore MLVScan.DevCLI.csproj
+
+      - name: Publish standalone binary
+        run: >-
+          dotnet publish MLVScan.DevCLI.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:DebugType=None
+          -o artifacts/publish
+
+      - name: Package release assets
+        shell: pwsh
+        run: |
+          $version = '${{ needs.check-version.outputs.new-version }}'
+          $artifactRoot = Join-Path $PWD 'artifacts'
+          $publishDir = Join-Path $artifactRoot 'publish'
+          $releaseDir = Join-Path $artifactRoot 'mlvscan-win-x64'
+          New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
+
+          Copy-Item (Join-Path $publishDir 'MLVScan.DevCLI.exe') (Join-Path $releaseDir 'mlvscan.exe') -Force
+          Copy-Item README.md (Join-Path $releaseDir 'README.md') -Force
+          Copy-Item LICENSE (Join-Path $releaseDir 'LICENSE') -Force
+
+          $infoJson = & (Join-Path $releaseDir 'mlvscan.exe') info --format json | Out-String
+          $info = $infoJson | ConvertFrom-Json
+
+          $zipPath = Join-Path $artifactRoot 'mlvscan-win-x64.zip'
+          if (Test-Path $zipPath) {
+            Remove-Item $zipPath -Force
+          }
+          Compress-Archive -Path (Join-Path $releaseDir '*') -DestinationPath $zipPath -Force
+
+          $zipHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -Path (Join-Path $artifactRoot 'mlvscan-win-x64.sha256') -Value "$zipHash  mlvscan-win-x64.zip"
+
+          $manifest = [ordered]@{
+            releaseTag = "v$version"
+            command = 'mlvscan'
+            platform = 'windows'
+            architecture = 'x64'
+            asset = [ordered]@{
+              name = 'mlvscan-win-x64.zip'
+              checksumFile = 'mlvscan-win-x64.sha256'
+              sha256 = $zipHash
+            }
+            cli = $info
+          }
+
+          $manifestJson = $manifest | ConvertTo-Json -Depth 8
+          Set-Content -Path (Join-Path $artifactRoot 'mlvscan-win-x64.manifest.json') -Value $manifestJson
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-release-assets
+          path: |
+            artifacts/mlvscan-win-x64.zip
+            artifacts/mlvscan-win-x64.sha256
+            artifacts/mlvscan-win-x64.manifest.json
 
   create-release:
-    needs: check-version
+    needs: [check-version, build-windows-binary]
     if: needs.check-version.outputs.version-changed == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v6
-      with:
-        fetch-depth: 0
-         
-    - name: Generate Release Notes
-      id: release_notes
-      run: |
-        VERSION="${{ needs.check-version.outputs.new-version }}"
-        
-        # Get commits since last tag
-        LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-        
-        if [ -n "$LAST_TAG" ]; then
-          COMMITS=$(git log $LAST_TAG..HEAD --pretty=format:"- %s (%h)" --no-merges)
-        else
-          COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges -n 10)
-        fi
-        
-        # Create release notes
-        cat > release_notes.md << EOF
-        ## MLVScan.DevCLI v$VERSION
-        
-        ### Changes
-        
-        $COMMITS
-        
-        ### Installation
-        
-        \`\`\`bash
-        dotnet tool install -g MLVScan.DevCLI --version $VERSION
-        \`\`\`
-        
-        Or update existing installation:
-        
-        \`\`\`bash
-        dotnet tool update -g MLVScan.DevCLI --version $VERSION
-        \`\`\`
-        
-        ### NuGet Package
-        
-        This release is available on NuGet: https://www.nuget.org/packages/MLVScan.DevCLI/$VERSION
-        
-        ---
-        
-        **Full Changelog**: https://github.com/${{ github.repository }}/compare/$LAST_TAG...v$VERSION
-        EOF
-        
-        echo "Release notes generated"
-        
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: v${{ needs.check-version.outputs.new-version }}
-        name: MLVScan.DevCLI v${{ needs.check-version.outputs.new-version }}
-        body_path: release_notes.md
-        draft: false
-        prerelease: false
-        make_latest: true
-        token: ${{ secrets.GITHUB_TOKEN }}
-        
-    - name: Summary
-      run: |
-        echo "### ✅ Release Created Successfully" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Version:** v${{ needs.check-version.outputs.new-version }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Tag:** v${{ needs.check-version.outputs.new-version }}" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "The NuGet publish workflow will be triggered automatically." >> $GITHUB_STEP_SUMMARY
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download release assets
+        uses: actions/download-artifact@v5
+        with:
+          name: windows-release-assets
+          path: release-assets
+
+      - name: Generate release notes
+        run: |
+          VERSION="${{ needs.check-version.outputs.new-version }}"
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+
+          if [ -n "$LAST_TAG" ]; then
+            COMMITS=$(git log "$LAST_TAG"..HEAD --pretty=format:"- %s (%h)" --no-merges)
+            CHANGELOG_URL="https://github.com/${{ github.repository }}/compare/$LAST_TAG...v$VERSION"
+          else
+            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges -n 10)
+            CHANGELOG_URL="https://github.com/${{ github.repository }}/releases/tag/v$VERSION"
+          fi
+
+          cat > release_notes.md <<EOF
+          ## MLVScan.DevCLI v$VERSION
+
+          ### Highlights
+
+          - Standalone Windows binary release asset for desktop integrations (`mlvscan-win-x64.zip`)
+          - Stable CLI command name: `mlvscan`
+          - Machine-readable metadata via `mlvscan info --format json`
+
+          ### Changes
+
+          $COMMITS
+
+          ### Installation
+
+          **Standalone binary**
+
+          - Download `mlvscan-win-x64.zip` from this release
+          - Extract and run `mlvscan.exe info --format json` to verify the install
+
+          **NuGet tool**
+
+          ```bash
+          dotnet tool install -g MLVScan.DevCLI --version $VERSION
+          ```
+
+          Or update an existing installation:
+
+          ```bash
+          dotnet tool update -g MLVScan.DevCLI --version $VERSION
+          ```
+
+          ### NuGet Package
+
+          This release is available on NuGet: https://www.nuget.org/packages/MLVScan.DevCLI/$VERSION
+
+          ---
+
+          **Full Changelog**: $CHANGELOG_URL
+          EOF
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.check-version.outputs.new-version }}
+          name: MLVScan.DevCLI v${{ needs.check-version.outputs.new-version }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+          make_latest: true
+          files: |
+            release-assets/mlvscan-win-x64.zip
+            release-assets/mlvscan-win-x64.sha256
+            release-assets/mlvscan-win-x64.manifest.json
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          echo "### ✅ Release Created Successfully" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Version:** v${{ needs.check-version.outputs.new-version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Assets:** mlvscan-win-x64.zip, mlvscan-win-x64.sha256, mlvscan-win-x64.manifest.json" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "The NuGet publish workflow will be triggered automatically." >> "$GITHUB_STEP_SUMMARY"

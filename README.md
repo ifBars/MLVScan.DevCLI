@@ -4,6 +4,16 @@ Developer CLI tool for MLVScan - scan .NET mod assemblies during development wit
 
 ## Installation
 
+### Standalone Binary (Recommended for Desktop Integrations)
+
+Download the latest `mlvscan-win-x64.zip` release asset from GitHub Releases, then run:
+
+```bash
+mlvscan.exe info --format json
+```
+
+### .NET Tool
+
 Install as a global .NET tool:
 
 ```bash
@@ -62,7 +72,7 @@ dotnet tool update MLVScan.DevCLI
 Scan a mod DLL and get developer-friendly output:
 
 ```bash
-mlvscan-dev MyMod.dll
+mlvscan MyMod.dll
 ```
 
 ### JSON Output (for CI/CD)
@@ -70,23 +80,23 @@ mlvscan-dev MyMod.dll
 Get machine-readable JSON output in legacy format:
 
 ```bash
-mlvscan-dev MyMod.dll --json
+mlvscan MyMod.dll --json
 ```
 
 Or use the new standardized schema format (recommended):
 
 ```bash
-mlvscan-dev MyMod.dll --format schema
+mlvscan MyMod.dll --format schema
 ```
 
-The schema format follows MLVScan Schema v1.0.0, which is compatible with the web UI and other MLVScan tools, including threat family matches when a sample maps to a known malware cluster.
+The schema format follows MLVScan Schema v1.1.0, which keeps the v1 contract but adds richer context such as risk scores, developer-guidance provenance, deeper data-flow metadata, and threat-family evidence fields.
 
 ### Fail Build on High Severity
 
 Exit with error code 1 if findings of High or Critical severity are found:
 
 ```bash
-mlvscan-dev MyMod.dll --fail-on High
+mlvscan MyMod.dll --fail-on High
 ```
 
 ### Verbose Mode
@@ -94,7 +104,16 @@ mlvscan-dev MyMod.dll --fail-on High
 Show all findings, even those without developer guidance:
 
 ```bash
-mlvscan-dev MyMod.dll --verbose
+mlvscan MyMod.dll --verbose
+```
+
+### Tool Metadata
+
+Emit machine-readable tool metadata for integrations such as SIMM:
+
+```bash
+mlvscan info --format json
+mlvscan --schema-version
 ```
 
 ## MSBuild Integration
@@ -107,7 +126,7 @@ Note: The output of the DevCLI may be hidden when using the dotnet CLI. Use an I
 
 ```xml
 <Target Name="MLVScanCheck" AfterTargets="Build">
-  <Exec Command="dotnet mlvscan-dev $(TargetPath)" />
+  <Exec Command="dotnet tool run mlvscan -- $(TargetPath)" />
 </Target>
 ```
 
@@ -115,7 +134,7 @@ Note: The output of the DevCLI may be hidden when using the dotnet CLI. Use an I
 
 ```xml
 <Target Name="MLVScanCheck" AfterTargets="Build">
-  <Exec Command="dotnet mlvscan-dev $(TargetPath) --fail-on High" />
+  <Exec Command="dotnet tool run mlvscan -- $(TargetPath) --fail-on High" />
 </Target>
 ```
 
@@ -123,7 +142,7 @@ Note: The output of the DevCLI may be hidden when using the dotnet CLI. Use an I
 
 ```xml
 <Target Name="MLVScanCheck" AfterTargets="Build">
-  <Exec Command="dotnet mlvscan-dev $(TargetPath) --format schema > mlvscan-report.json" />
+  <Exec Command="dotnet tool run mlvscan -- $(TargetPath) --format schema > mlvscan-report.json" />
 </Target>
 ```
 
@@ -155,14 +174,14 @@ Here's a complete example of a mod project with MLVScan integration:
 
   <!-- Run MLVScan after every build -->
   <Target Name="MLVScanCheck" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug'">
-    <Exec Command="dotnet mlvscan-dev &quot;$(TargetPath)&quot;" 
+    <Exec Command="dotnet tool run mlvscan -- &quot;$(TargetPath)&quot;" 
           ContinueOnError="true" 
           IgnoreExitCode="true" />
   </Target>
 
   <!-- Fail release builds if critical issues found -->
   <Target Name="MLVScanCheckRelease" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
-    <Exec Command="dotnet mlvscan-dev &quot;$(TargetPath)&quot; --fail-on Critical" />
+    <Exec Command="dotnet tool run mlvscan -- &quot;$(TargetPath)&quot; --fail-on Critical" />
   </Target>
 </Project>
 ```
@@ -171,13 +190,13 @@ Here's a complete example of a mod project with MLVScan integration:
 
 ```
 Usage:
-  mlvscan-dev <assembly-path> [options]
+  mlvscan <assembly-path> [options]
 
 Arguments:
   <assembly-path>  Path to the .dll file to scan
 
 Options:
-  -o, --format <format>   Output format: console (default), json (legacy), schema (MLVScan Schema v1.0.0)
+  -o, --format <format>   Output format: console (default), json (legacy), schema (MLVScan Schema v1.1.0)
   -j, --json              Output results as JSON (legacy format, use --format schema for new format)
   -f, --fail-on <value>   Exit with error code 1 if findings >= severity (Low/Medium/High/Critical)
   -v, --verbose           Show all findings, not just those with developer guidance
@@ -244,12 +263,14 @@ Matched Rules: DllImportRule
 
 ### Schema Output (New, Recommended)
 
-Using `--format schema` outputs the standardized MLVScan Schema v1.0.0 format:
+Using `--format schema` outputs the standardized MLVScan Schema v1.1.0 format:
 
 ```json
 {
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "1.1.0",
   "metadata": {
+    "coreVersion": "1.1.5",
+    "platformVersion": "1.1.5",
     "scannerVersion": "1.1.5",
     "timestamp": "2026-01-29T12:34:56.789Z",
     "scanMode": "developer",
@@ -293,12 +314,22 @@ Using `--format schema` outputs the standardized MLVScan Schema v1.0.0 format:
       "description": "Detected executable write near persistence-prone directory",
       "severity": "High",
       "location": "MyMod.SaveManager.SaveSettings:42",
-      "codeSnippet": "..."
+      "codeSnippet": "...",
+      "riskScore": 72,
+      "developerGuidance": {
+        "ruleId": "PersistenceRule",
+        "ruleIds": ["PersistenceRule"],
+        "remediation": "For mod settings, use MelonPreferences...",
+        "documentationUrl": "https://melonwiki.xyz/#/modders/preferences",
+        "alternativeApis": ["MelonPreferences.CreateEntry<T>"],
+        "isRemediable": true
+      }
     }
   ],
   "developerGuidance": [
     {
       "ruleId": "PersistenceRule",
+      "ruleIds": ["PersistenceRule"],
       "remediation": "For mod settings, use MelonPreferences...",
       "documentationUrl": "https://melonwiki.xyz/#/modders/preferences",
       "alternativeApis": ["MelonPreferences.CreateEntry<T>"],
@@ -308,7 +339,7 @@ Using `--format schema` outputs the standardized MLVScan Schema v1.0.0 format:
 }
 ```
 
-This format is compatible with the MLVScan web UI and other ecosystem tools.
+This format is compatible with the MLVScan web UI and other ecosystem tools. Schema v1.1.0 also adds optional `callChainId` and `dataFlowChainId` on findings, plus `dataFlows[].callDepth` and `dataFlows[].isSuspicious` when those sections are present.
 
 ## CI/CD Integration Examples
 
@@ -337,7 +368,7 @@ jobs:
         run: dotnet build -c Release
       
       - name: Scan for issues
-        run: mlvscan-dev ./bin/Release/netstandard2.1/MyMod.dll --json > scan-results.json
+        run: mlvscan ./bin/Release/netstandard2.1/MyMod.dll --json > scan-results.json
       
       - name: Upload scan results
         uses: actions/upload-artifact@v3
@@ -365,8 +396,8 @@ scan:
   stage: scan
   script:
     - dotnet tool install --global MLVScan.DevCLI
-    - mlvscan-dev ./bin/Release/netstandard2.1/MyMod.dll --json > scan-results.json
-    - mlvscan-dev ./bin/Release/netstandard2.1/MyMod.dll --fail-on Critical
+    - mlvscan ./bin/Release/netstandard2.1/MyMod.dll --json > scan-results.json
+    - mlvscan ./bin/Release/netstandard2.1/MyMod.dll --fail-on Critical
   artifacts:
     reports:
       mlvscan: scan-results.json

@@ -24,6 +24,37 @@ jobs:
       - name: Update MLVScan.Core package
         run: dotnet add MLVScan.DevCLI.csproj package MLVScan.Core
 
+      - name: Bump DevCLI patch version if Core changed
+        run: |
+          python <<'PY'
+          import pathlib
+          import re
+          import subprocess
+          import sys
+
+          csproj = pathlib.Path("MLVScan.DevCLI.csproj")
+          diff = subprocess.run(
+              ["git", "diff", "--quiet", str(csproj)],
+              check=False,
+          )
+
+          if diff.returncode == 0:
+              print("No package update detected; skipping version bump")
+              sys.exit(0)
+
+          content = csproj.read_text(encoding="utf-8")
+          match = re.search(r"<Version>(\d+)\.(\d+)\.(\d+)</Version>", content)
+          if not match:
+              raise SystemExit("Could not find <Version>x.y.z</Version> in project file")
+
+          major, minor, patch = map(int, match.groups())
+          next_version = f"{major}.{minor}.{patch + 1}"
+          updated = content[:match.start()] + f"<Version>{next_version}</Version>" + content[match.end():]
+          csproj.write_text(updated, encoding="utf-8")
+
+          print(f"Bumped package version to {next_version}")
+          PY
+
       - name: Restore dependencies
         run: dotnet restore MLVScan.DevCLI.csproj
 

@@ -1,5 +1,6 @@
 using System.CommandLine;
 using System.Collections;
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using MLVScan;
@@ -8,6 +9,16 @@ using MLVScan.Models;
 using MLVScan.Models.Dto;
 using MLVScan.Services;
 
+if (TryHandleInfoCommand(args))
+{
+    return 0;
+}
+
+if (TryHandleSchemaVersionCommand(args))
+{
+    return 0;
+}
+
 var assemblyPathArgument = new Argument<FileInfo>(
     "assembly-path",
     "Path to the .dll file to scan");
@@ -15,7 +26,7 @@ var assemblyPathArgument = new Argument<FileInfo>(
 var formatOption = new Option<string>(
     "--format",
     () => "console",
-    "Output format: console (default), json (legacy), schema (new schema v1.0.0)");
+    "Output format: console (default), json (legacy), schema (new schema v1.1.0)");
 formatOption.AddAlias("-o");
 
 var jsonOption = new Option<bool>(
@@ -33,7 +44,7 @@ var verboseOption = new Option<bool>(
     "Show all findings, not just those with developer guidance");
 verboseOption.AddAlias("-v");
 
-var rootCommand = new RootCommand("MLVScan Developer CLI - Scan MelonLoader mods during development");
+var rootCommand = new RootCommand("MLVScan CLI - Scan .NET mod assemblies during development and CI");
 rootCommand.Add(assemblyPathArgument);
 rootCommand.Add(formatOption);
 rootCommand.Add(jsonOption);
@@ -80,7 +91,7 @@ static int ScanAssembly(FileInfo assemblyPath, string format, string? failOn, bo
             : findings.Where(f => f.DeveloperGuidance != null).ToList();
 
         var options = ScanResultOptions.ForCli(config.DeveloperMode);
-        options.PlatformVersion = "1.0.2";
+        options.PlatformVersion = GetCliVersion();
         var schemaResult = ScanResultMapper.ToDto(findings, assemblyPath.Name, assemblyBytes, options);
 
         // Output based on format
@@ -435,6 +446,127 @@ static Severity? ParseSeverity(string severity)
     };
 }
 
+static bool TryHandleInfoCommand(IReadOnlyList<string> arguments)
+{
+    if (arguments.Count == 0 || !string.Equals(arguments[0], "info", StringComparison.OrdinalIgnoreCase))
+    {
+        return false;
+    }
+
+    if (arguments.Any(static argument => string.Equals(argument, "--help", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(argument, "-h", StringComparison.OrdinalIgnoreCase)))
+    {
+        OutputInfoHelp();
+        return true;
+    }
+
+    var format = "text";
+    for (var index = 1; index < arguments.Count; index++)
+    {
+        var argument = arguments[index];
+        if (string.Equals(argument, "--format", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(argument, "-o", StringComparison.OrdinalIgnoreCase))
+        {
+            if (index + 1 >= arguments.Count)
+            {
+                Console.Error.WriteLine("Error: Missing value for --format.");
+                Environment.ExitCode = 1;
+                return true;
+            }
+
+            format = arguments[index + 1];
+            index++;
+            continue;
+        }
+
+        Console.Error.WriteLine($"Error: Unknown info option '{argument}'.");
+        Environment.ExitCode = 1;
+        return true;
+    }
+
+    OutputInfo(format);
+    return true;
+}
+
+static bool TryHandleSchemaVersionCommand(IReadOnlyList<string> arguments)
+{
+    if (arguments.Count != 1)
+    {
+        return false;
+    }
+
+    var argument = arguments[0];
+    if (!string.Equals(argument, "--schema-version", StringComparison.OrdinalIgnoreCase)
+        && !string.Equals(argument, "schema-version", StringComparison.OrdinalIgnoreCase))
+    {
+        return false;
+    }
+
+    Console.WriteLine(MLVScanVersions.SchemaVersion);
+    return true;
+}
+
+static void OutputInfo(string format)
+{
+    var info = new CliInfo
+    {
+        Command = "mlvscan",
+        Platform = "cli",
+        PlatformVersion = GetCliVersion(),
+        SchemaVersion = MLVScanVersions.SchemaVersion,
+        CoreVersion = MLVScanVersions.CoreVersion,
+    };
+
+    if (string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
+    {
+        var jsonOptions = new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        };
+
+        Console.WriteLine(JsonSerializer.Serialize(info, jsonOptions));
+        return;
+    }
+
+    if (!string.Equals(format, "text", StringComparison.OrdinalIgnoreCase))
+    {
+        Console.Error.WriteLine($"Error: Unsupported info format '{format}'. Use 'text' or 'json'.");
+        Environment.ExitCode = 1;
+        return;
+    }
+
+    Console.WriteLine("MLVScan CLI");
+    Console.WriteLine($"Command: {info.Command}");
+    Console.WriteLine($"Platform: {info.Platform}");
+    Console.WriteLine($"Platform Version: {info.PlatformVersion}");
+    Console.WriteLine($"Schema Version: {info.SchemaVersion}");
+    Console.WriteLine($"Core Version: {info.CoreVersion}");
+}
+
+static void OutputInfoHelp()
+{
+    Console.WriteLine("Usage:");
+    Console.WriteLine("  mlvscan info [--format <text|json>]");
+    Console.WriteLine();
+    Console.WriteLine("Options:");
+    Console.WriteLine("  -o, --format <format>   Output format: text (default) or json");
+    Console.WriteLine("  -h, --help              Show help information");
+}
+
+static string GetCliVersion()
+{
+    var assembly = Assembly.GetExecutingAssembly();
+    var informationalVersion = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+    if (!string.IsNullOrWhiteSpace(informationalVersion))
+    {
+        return informationalVersion.Split('+', 2)[0];
+    }
+
+    return assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+}
+
 sealed class ThreatFamilyConsoleView
 {
     public string FamilyId { get; set; } = string.Empty;
@@ -446,5 +578,14 @@ sealed class ThreatFamilyConsoleView
     public List<string> MatchedRules { get; set; } = new();
     public List<string> AdvisorySlugs { get; set; } = new();
     public List<string> Evidence { get; set; } = new();
+}
+
+sealed class CliInfo
+{
+    public string Command { get; set; } = string.Empty;
+    public string Platform { get; set; } = string.Empty;
+    public string PlatformVersion { get; set; } = string.Empty;
+    public string SchemaVersion { get; set; } = string.Empty;
+    public string CoreVersion { get; set; } = string.Empty;
 }
 
