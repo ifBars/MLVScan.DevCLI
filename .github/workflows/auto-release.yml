@@ -7,6 +7,7 @@ on:
       - master
     paths:
       - 'MLVScan.DevCLI.csproj'
+      - 'Directory.Build.props'
   workflow_dispatch:
     inputs:
       version:
@@ -231,9 +232,52 @@ jobs:
 
       - name: Summary
         run: |
-          echo "### ✅ Release Created Successfully" >> "$GITHUB_STEP_SUMMARY"
+          echo "### ✅ GitHub Release Created Successfully" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "**Version:** v${{ needs.check-version.outputs.new-version }}" >> "$GITHUB_STEP_SUMMARY"
           echo "**Assets:** mlvscan-win-x64.zip, mlvscan-win-x64.sha256, mlvscan-win-x64.manifest.json" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "The NuGet publish workflow will be triggered automatically." >> "$GITHUB_STEP_SUMMARY"
+          echo "NuGet package will be published next." >> "$GITHUB_STEP_SUMMARY"
+
+  publish-nuget:
+    needs: [check-version, create-release]
+    if: needs.check-version.outputs.version-changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore MLVScan.DevCLI.csproj
+
+      - name: Build
+        run: dotnet build MLVScan.DevCLI.csproj -c Release --no-restore
+
+      - name: Pack
+        run: dotnet pack MLVScan.DevCLI.csproj -c Release --no-build -p:PackageVersion=${{ needs.check-version.outputs.new-version }} -o ./nupkg
+
+      - name: Publish to NuGet
+        run: dotnet nuget push ./nupkg/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+
+      - name: Upload package as artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: nuget-package
+          path: ./nupkg/*.nupkg
+
+      - name: Summary
+        run: |
+          echo "### ✅ NuGet Package Published Successfully" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Version:** v${{ needs.check-version.outputs.new-version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Package:** https://www.nuget.org/packages/MLVScan.DevCLI/${{ needs.check-version.outputs.new-version }}" >> "$GITHUB_STEP_SUMMARY"
