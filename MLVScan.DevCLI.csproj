@@ -10,7 +10,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>mlvscan</ToolCommandName>
     <PackageId>MLVScan.DevCLI</PackageId>
-    <Version>1.1.0</Version>
+    <Version>1.1.1</Version>
     <Authors>Bars</Authors>
     <Description>Developer CLI tool for MLVScan - scan MelonLoader mods during development with remediation guidance</Description>
     <PackageTags>melonloader;security;malware;scanner;developer;cli</PackageTags>

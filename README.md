@@ -89,7 +89,7 @@ Or use the new standardized schema format (recommended):
 mlvscan MyMod.dll --format schema
 ```
 
-The schema format follows MLVScan Schema v1.1.0, which keeps the v1 contract but adds richer context such as risk scores, developer-guidance provenance, deeper data-flow metadata, and threat-family evidence fields.
+The schema format follows MLVScan Schema, which keeps the v1 contract but adds richer context such as risk scores, developer-guidance provenance, deeper data-flow metadata, and threat-family evidence fields.
 
 ### Fail Build on High Severity
 
@@ -263,7 +263,7 @@ Matched Rules: DllImportRule
 
 ### Schema Output (New, Recommended)
 
-Using `--format schema` outputs the standardized MLVScan Schema v1.1.0 format:
+Using `--format schema` outputs the standardized MLVScan Schema format:
 
 ```json
 {
