@@ -1,5 +1,4 @@
 using System.CommandLine;
-using System.Collections;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -7,6 +6,7 @@ using MLVScan;
 using MLVScan.DevCLI;
 using MLVScan.Models;
 using MLVScan.Models.Dto;
+using MLVScan.Models.ThreatIntel;
 using MLVScan.Services;
 
 if (TryHandleInfoCommand(args))
@@ -26,7 +26,7 @@ var assemblyPathArgument = new Argument<FileInfo>(
 var formatOption = new Option<string>(
     "--format",
     () => "console",
-    "Output format: console (default), json (legacy), schema (new schema v1.1.0)");
+    "Output format: console (default), json (legacy), schema (new schema v1.2.0)");
 formatOption.AddAlias("-o");
 
 var jsonOption = new Option<bool>(
@@ -39,9 +39,13 @@ var failOnOption = new Option<string?>(
     "Exit with error code 1 if findings >= specified severity (Low/Medium/High/Critical)");
 failOnOption.AddAlias("-f");
 
+var failOnDispositionOption = new Option<string?>(
+    "--fail-on-disposition",
+    "Exit with error code 1 if disposition >= specified classification (Clean/Suspicious/KnownThreat)");
+
 var verboseOption = new Option<bool>(
     "--verbose",
-    "Show all findings, not just those with developer guidance");
+    "Show advanced diagnostics in addition to default retained findings");
 verboseOption.AddAlias("-v");
 
 var rootCommand = new RootCommand("MLVScan CLI - Scan .NET mod assemblies during development and CI");
@@ -49,23 +53,35 @@ rootCommand.Add(assemblyPathArgument);
 rootCommand.Add(formatOption);
 rootCommand.Add(jsonOption);
 rootCommand.Add(failOnOption);
+rootCommand.Add(failOnDispositionOption);
 rootCommand.Add(verboseOption);
 
-rootCommand.SetHandler((FileInfo assemblyPath, string format, bool json, string? failOn, bool verbose) =>
-{
-    // Handle legacy --json flag
-    if (json && format == "console")
+rootCommand.SetHandler(
+    (FileInfo assemblyPath, string format, bool json, string? failOn, string? failOnDisposition, bool verbose) =>
     {
-        format = "json";
-    }
-    
-    var exitCode = ScanAssembly(assemblyPath, format, failOn, verbose);
-    Environment.Exit(exitCode);
-}, assemblyPathArgument, formatOption, jsonOption, failOnOption, verboseOption);
+        if (json && format == "console")
+        {
+            format = "json";
+        }
+
+        var exitCode = ScanAssembly(assemblyPath, format, failOn, failOnDisposition, verbose);
+        Environment.Exit(exitCode);
+    },
+    assemblyPathArgument,
+    formatOption,
+    jsonOption,
+    failOnOption,
+    failOnDispositionOption,
+    verboseOption);
 
 return await rootCommand.InvokeAsync(args);
 
-static int ScanAssembly(FileInfo assemblyPath, string format, string? failOn, bool verbose)
+static int ScanAssembly(
+    FileInfo assemblyPath,
+    string format,
+    string? failOn,
+    string? failOnDisposition,
+    bool verbose)
 {
     if (!assemblyPath.Exists)
     {
@@ -75,56 +91,75 @@ static int ScanAssembly(FileInfo assemblyPath, string format, string? failOn, bo
 
     try
     {
-        byte[] assemblyBytes = File.ReadAllBytes(assemblyPath.FullName);
-
-        // Create scanner with developer mode enabled
+        var assemblyBytes = File.ReadAllBytes(assemblyPath.FullName);
         var config = new ScanConfig { DeveloperMode = true };
-        var rules = RuleFactory.CreateDefaultRules();
-        var scanner = new AssemblyScanner(rules, config);
-
-        // Scan the assembly
+        var scanner = new AssemblyScanner(RuleFactory.CreateDefaultRules(), config);
         var findings = scanner.Scan(assemblyPath.FullName).ToList();
-
-        // Filter findings if not verbose (only show those with guidance)
-        var displayFindings = verbose
-            ? findings
-            : findings.Where(f => f.DeveloperGuidance != null).ToList();
 
         var options = ScanResultOptions.ForCli(config.DeveloperMode);
         options.PlatformVersion = GetCliVersion();
-        var schemaResult = ScanResultMapper.ToDto(findings, assemblyPath.Name, assemblyBytes, options);
 
-        // Output based on format
-        switch (format.ToLower())
+        var schemaResult = ScanResultMapper.ToDto(findings, assemblyPath.Name, assemblyBytes, options);
+        var findingPairs = findings
+            .Zip(schemaResult.Findings, static (finding, dto) => new FindingPair(finding, dto))
+            .ToList();
+        var displayPairs = verbose
+            ? findingPairs
+            : findingPairs
+                .Where(static pair => !string.Equals(pair.Dto.Visibility, nameof(FindingVisibility.Advanced), StringComparison.Ordinal))
+                .ToList();
+
+        switch (format.ToLowerInvariant())
         {
             case "schema":
                 OutputSchema(schemaResult);
                 break;
             case "json":
-                OutputJson(assemblyPath.Name, displayFindings);
+                OutputJson(assemblyPath.Name, displayPairs.Select(static pair => pair.Finding).ToList());
                 break;
             case "console":
             default:
-                OutputConsole(assemblyPath.Name, displayFindings, schemaResult, verbose);
+                OutputConsole(schemaResult, displayPairs.Select(static pair => pair.Dto).ToList(), verbose);
                 break;
         }
 
-        // Check if we should fail based on severity
-        if (!string.IsNullOrEmpty(failOn))
+        if (!string.IsNullOrWhiteSpace(failOnDisposition))
+        {
+            var failClassification = ParseDispositionClassification(failOnDisposition);
+            if (failClassification.HasValue)
+            {
+                var currentClassification = GetEffectiveDispositionClassification(schemaResult);
+                if (currentClassification >= failClassification.Value)
+                {
+                    if (string.Equals(format, "console", StringComparison.OrdinalIgnoreCase))
+                    {
+                        Console.Error.WriteLine();
+                        Console.Error.WriteLine(
+                            $"Build failed: Disposition {currentClassification} meets or exceeds {failClassification.Value}");
+                    }
+
+                    return 1;
+                }
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(failOn))
         {
             var failSeverity = ParseSeverity(failOn);
             if (failSeverity.HasValue && findings.Any(f => f.Severity >= failSeverity.Value))
             {
-                if (format == "console")
+                if (string.Equals(format, "console", StringComparison.OrdinalIgnoreCase))
                 {
                     Console.Error.WriteLine();
-                    Console.Error.WriteLine($"Build failed: Found {findings.Count(f => f.Severity >= failSeverity.Value)} finding(s) >= {failSeverity.Value}");
+                    Console.Error.WriteLine(
+                        $"Build failed: Found {findings.Count(f => f.Severity >= failSeverity.Value)} finding(s) >= {failSeverity.Value}");
                 }
+
                 return 1;
             }
         }
 
-        return findings.Count > 0 ? 0 : 0; // Always return 0 unless --fail-on is used
+        return 0;
     }
     catch (Exception ex)
     {
@@ -133,13 +168,13 @@ static int ScanAssembly(FileInfo assemblyPath, string format, string? failOn, bo
         {
             Console.Error.WriteLine(ex.StackTrace);
         }
+
         return 1;
     }
 }
 
 static void OutputSchema(ScanResultDto result)
 {
-    // Serialize with indentation for readability
     var jsonOptions = new JsonSerializerOptions
     {
         WriteIndented = true,
@@ -150,26 +185,39 @@ static void OutputSchema(ScanResultDto result)
     Console.WriteLine(JsonSerializer.Serialize(result, jsonOptions));
 }
 
-static void OutputConsole(string assemblyName, List<ScanFinding> findings, ScanResultDto schemaResult, bool verbose)
+static void OutputConsole(ScanResultDto schemaResult, List<FindingDto> findings, bool verbose)
 {
     Console.WriteLine("MLVScan Developer Report");
     Console.WriteLine("========================");
-    Console.WriteLine($"Assembly: {assemblyName}");
-    Console.WriteLine($"Findings: {findings.Count}");
+    Console.WriteLine($"Assembly: {schemaResult.Input.FileName}");
+    Console.WriteLine($"Disposition: {schemaResult.Disposition?.Classification ?? GetEffectiveDispositionClassification(schemaResult).ToString()}");
+    Console.WriteLine($"Retained Findings: {findings.Count}");
+
+    var advancedCount = schemaResult.Findings.Count(static finding =>
+        string.Equals(finding.Visibility, nameof(FindingVisibility.Advanced), StringComparison.Ordinal));
+    if (advancedCount > 0)
+    {
+        Console.WriteLine($"Advanced Diagnostics: {advancedCount}{(verbose ? string.Empty : " (use --verbose to show)")}");
+    }
+
     Console.WriteLine();
 
+    OutputDispositionSummary(schemaResult);
     OutputThreatFamilySummary(schemaResult);
 
     if (findings.Count == 0)
     {
-        Console.WriteLine("✓ No issues found!");
+        Console.WriteLine(advancedCount > 0 && !verbose
+            ? "No retained findings. Use --verbose to inspect advanced diagnostics."
+            : "No retained findings.");
         return;
     }
 
     var groupedByRule = findings
-        .Where(f => f.RuleId != null)
-        .GroupBy(f => f.RuleId)
-        .OrderByDescending(g => g.Max(f => f.Severity));
+        .Where(static finding => finding.RuleId != null)
+        .GroupBy(static finding => finding.RuleId!)
+        .OrderByDescending(static group => group.Max(finding => ParseSeverity(finding.Severity) ?? Severity.Low))
+        .ThenBy(static group => group.Key, StringComparer.Ordinal);
 
     foreach (var ruleGroup in groupedByRule)
     {
@@ -188,15 +236,14 @@ static void OutputConsole(string assemblyName, List<ScanFinding> findings, ScanR
             Console.ResetColor();
             Console.WriteLine($"  {firstFinding.DeveloperGuidance.Remediation}");
 
-            if (!string.IsNullOrEmpty(firstFinding.DeveloperGuidance.DocumentationUrl))
+            if (!string.IsNullOrWhiteSpace(firstFinding.DeveloperGuidance.DocumentationUrl))
             {
                 Console.ForegroundColor = ConsoleColor.Blue;
-                Console.WriteLine($"  📚 {firstFinding.DeveloperGuidance.DocumentationUrl}");
+                Console.WriteLine($"  Docs: {firstFinding.DeveloperGuidance.DocumentationUrl}");
                 Console.ResetColor();
             }
 
-            if (firstFinding.DeveloperGuidance.AlternativeApis != null &&
-                firstFinding.DeveloperGuidance.AlternativeApis.Length > 0)
+            if (firstFinding.DeveloperGuidance.AlternativeApis is { Length: > 0 })
             {
                 Console.WriteLine($"  Suggested APIs: {string.Join(", ", firstFinding.DeveloperGuidance.AlternativeApis)}");
             }
@@ -204,7 +251,7 @@ static void OutputConsole(string assemblyName, List<ScanFinding> findings, ScanR
             if (!firstFinding.DeveloperGuidance.IsRemediable)
             {
                 Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.WriteLine("  ⚠ No safe alternative - this pattern should not be used");
+                Console.WriteLine("  Warning: No safe alternative - this pattern should not be used");
                 Console.ResetColor();
             }
         }
@@ -216,45 +263,60 @@ static void OutputConsole(string assemblyName, List<ScanFinding> findings, ScanR
         }
 
         Console.WriteLine();
-        
-        // Show call chain if available
-        if (firstFinding.HasCallChain)
+
+        if (firstFinding.CallChain != null)
         {
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine("  Call Chain (Attack Path):");
             Console.ResetColor();
-            
-            foreach (var node in firstFinding.CallChain!.Nodes)
+
+            foreach (var node in firstFinding.CallChain.Nodes)
             {
                 var indent = node.NodeType switch
                 {
-                    CallChainNodeType.EntryPoint => "    ",
-                    CallChainNodeType.IntermediateCall => "      → ",
-                    CallChainNodeType.SuspiciousDeclaration => "        → ",
+                    "EntryPoint" => "    ",
+                    "IntermediateCall" => "      -> ",
+                    "SuspiciousDeclaration" => "        -> ",
                     _ => "    "
                 };
-                
+
                 var nodeTypeLabel = node.NodeType switch
                 {
-                    CallChainNodeType.EntryPoint => "[ENTRY]",
-                    CallChainNodeType.IntermediateCall => "[CALL]",
-                    CallChainNodeType.SuspiciousDeclaration => "[DECL]",
+                    "EntryPoint" => "[ENTRY]",
+                    "IntermediateCall" => "[CALL]",
+                    "SuspiciousDeclaration" => "[DECL]",
                     _ => "[???]"
                 };
-                
+
                 Console.WriteLine($"{indent}{nodeTypeLabel} {node.Location}");
                 Console.ForegroundColor = ConsoleColor.DarkGray;
                 Console.WriteLine($"{indent}        {node.Description}");
                 Console.ResetColor();
             }
         }
-        else
+
+        if (firstFinding.DataFlowChain != null)
+        {
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.WriteLine("  Data Flow:");
+            Console.ResetColor();
+            Console.WriteLine($"    Pattern: {firstFinding.DataFlowChain.Pattern}");
+            Console.WriteLine($"    Summary: {firstFinding.DataFlowChain.Description}");
+
+            if (!string.IsNullOrWhiteSpace(firstFinding.DataFlowChain.MethodLocation))
+            {
+                Console.WriteLine($"    Method: {firstFinding.DataFlowChain.MethodLocation}");
+            }
+        }
+
+        if (firstFinding.CallChain == null && firstFinding.DataFlowChain == null)
         {
             Console.WriteLine("  Locations:");
             foreach (var finding in ruleGroup.Take(3))
             {
-                Console.WriteLine($"    • {finding.Location}");
+                Console.WriteLine($"    - {finding.Location}");
             }
+
             if (count > 3)
             {
                 Console.WriteLine($"    ... and {count - 3} more");
@@ -262,29 +324,53 @@ static void OutputConsole(string assemblyName, List<ScanFinding> findings, ScanR
         }
 
         Console.WriteLine();
-        Console.WriteLine("─────────────────────────────────────────");
+        Console.WriteLine("-----------------------------------------");
         Console.WriteLine();
     }
 }
 
-static void OutputThreatFamilySummary(ScanResultDto schemaResult)
+static void OutputDispositionSummary(ScanResultDto schemaResult)
 {
-    var threatFamilies = GetThreatFamilies(schemaResult);
-    if (threatFamilies.Count == 0)
+    if (schemaResult.Disposition == null)
     {
         return;
     }
 
-    var primary = threatFamilies
-        .OrderByDescending(f => f.ExactHashMatch)
-        .ThenByDescending(f => f.Confidence)
-        .ThenBy(f => f.FamilyId, StringComparer.Ordinal)
+    var classification = GetEffectiveDispositionClassification(schemaResult);
+    var color = GetDispositionColor(classification);
+    if (color.HasValue)
+    {
+        Console.ForegroundColor = color.Value;
+    }
+
+    Console.WriteLine(schemaResult.Disposition.Headline);
+    Console.ResetColor();
+    Console.WriteLine($"Summary: {schemaResult.Disposition.Summary}");
+    Console.WriteLine($"Blocking Recommended: {(schemaResult.Disposition.BlockingRecommended ? "Yes" : "No")}");
+
+    if (!string.IsNullOrWhiteSpace(schemaResult.Disposition.PrimaryThreatFamilyId))
+    {
+        Console.WriteLine($"Primary Threat Family: {schemaResult.Disposition.PrimaryThreatFamilyId}");
+    }
+
+    Console.WriteLine();
+}
+
+static void OutputThreatFamilySummary(ScanResultDto schemaResult)
+{
+    if (schemaResult.ThreatFamilies == null || schemaResult.ThreatFamilies.Count == 0)
+    {
+        return;
+    }
+
+    var primary = schemaResult.ThreatFamilies
+        .OrderByDescending(static family => family.ExactHashMatch)
+        .ThenByDescending(static family => family.Confidence)
+        .ThenBy(static family => family.FamilyId, StringComparer.Ordinal)
         .First();
 
-    var verdict = primary.ExactHashMatch ? "Known malicious sample match" : "Known malware family match";
-
     Console.ForegroundColor = ConsoleColor.Red;
-    Console.WriteLine(verdict);
+    Console.WriteLine(primary.ExactHashMatch ? "Known malicious sample match" : "Known malware family match");
     Console.ResetColor();
     Console.WriteLine($"Family: {primary.DisplayName}");
     Console.WriteLine($"Match: {primary.MatchKind}");
@@ -305,7 +391,8 @@ static void OutputThreatFamilySummary(ScanResultDto schemaResult)
         Console.WriteLine("Evidence:");
         foreach (var evidence in primary.Evidence.Take(4))
         {
-            Console.WriteLine($"  - {evidence}");
+            var kind = string.IsNullOrWhiteSpace(evidence.Kind) ? "evidence" : evidence.Kind;
+            Console.WriteLine($"  - {kind}: {evidence.Value}");
         }
     }
 
@@ -317,111 +404,28 @@ static void OutputThreatFamilySummary(ScanResultDto schemaResult)
     Console.WriteLine();
 }
 
-static List<ThreatFamilyConsoleView> GetThreatFamilies(ScanResultDto schemaResult)
-{
-    var property = schemaResult.GetType().GetProperty("ThreatFamilies");
-    if (property?.GetValue(schemaResult) is not IEnumerable rawFamilies)
-    {
-        return new List<ThreatFamilyConsoleView>();
-    }
-
-    var results = new List<ThreatFamilyConsoleView>();
-    foreach (var rawFamily in rawFamilies)
-    {
-        if (rawFamily == null)
-        {
-            continue;
-        }
-
-        results.Add(new ThreatFamilyConsoleView
-        {
-            FamilyId = GetStringProperty(rawFamily, "FamilyId"),
-            DisplayName = GetStringProperty(rawFamily, "DisplayName"),
-            Summary = GetStringProperty(rawFamily, "Summary"),
-            MatchKind = GetStringProperty(rawFamily, "MatchKind"),
-            Confidence = GetDoubleProperty(rawFamily, "Confidence"),
-            ExactHashMatch = GetBoolProperty(rawFamily, "ExactHashMatch"),
-            MatchedRules = GetStringListProperty(rawFamily, "MatchedRules"),
-            AdvisorySlugs = GetStringListProperty(rawFamily, "AdvisorySlugs"),
-            Evidence = GetEvidenceProperty(rawFamily, "Evidence")
-        });
-    }
-
-    return results;
-}
-
-static string GetStringProperty(object target, string propertyName)
-{
-    return target.GetType().GetProperty(propertyName)?.GetValue(target) as string ?? string.Empty;
-}
-
-static double GetDoubleProperty(object target, string propertyName)
-{
-    return target.GetType().GetProperty(propertyName)?.GetValue(target) is double value ? value : 0d;
-}
-
-static bool GetBoolProperty(object target, string propertyName)
-{
-    return target.GetType().GetProperty(propertyName)?.GetValue(target) is bool value && value;
-}
-
-static List<string> GetStringListProperty(object target, string propertyName)
-{
-    if (target.GetType().GetProperty(propertyName)?.GetValue(target) is not IEnumerable values)
-    {
-        return new List<string>();
-    }
-
-    return values.Cast<object?>()
-        .Select(value => value?.ToString())
-        .Where(value => !string.IsNullOrWhiteSpace(value))
-        .Cast<string>()
-        .ToList();
-}
-
-static List<string> GetEvidenceProperty(object target, string propertyName)
-{
-    if (target.GetType().GetProperty(propertyName)?.GetValue(target) is not IEnumerable values)
-    {
-        return new List<string>();
-    }
-
-    var results = new List<string>();
-    foreach (var value in values)
-    {
-        if (value == null)
-        {
-            continue;
-        }
-
-        var kind = GetStringProperty(value, "Kind");
-        var content = GetStringProperty(value, "Value");
-        results.Add(string.IsNullOrWhiteSpace(kind) ? content : $"{kind}: {content}");
-    }
-
-    return results;
-}
-
 static void OutputJson(string assemblyName, List<ScanFinding> findings)
 {
     var result = new DevScanResult
     {
         AssemblyName = assemblyName,
         TotalFindings = findings.Count,
-        Findings = findings.Select(f => new DevFindingDto
+        Findings = findings.Select(static finding => new DevFindingDto
         {
-            RuleId = f.RuleId,
-            Description = f.Description,
-            Severity = f.Severity.ToString(),
-            Location = f.Location,
-            CodeSnippet = f.CodeSnippet,
-            Guidance = f.DeveloperGuidance != null ? new GuidanceDto
-            {
-                Remediation = f.DeveloperGuidance.Remediation,
-                DocumentationUrl = f.DeveloperGuidance.DocumentationUrl,
-                AlternativeApis = f.DeveloperGuidance.AlternativeApis,
-                IsRemediable = f.DeveloperGuidance.IsRemediable
-            } : null
+            RuleId = finding.RuleId,
+            Description = finding.Description,
+            Severity = finding.Severity.ToString(),
+            Location = finding.Location,
+            CodeSnippet = finding.CodeSnippet,
+            Guidance = finding.DeveloperGuidance != null
+                ? new GuidanceDto
+                {
+                    Remediation = finding.DeveloperGuidance.Remediation,
+                    DocumentationUrl = finding.DeveloperGuidance.DocumentationUrl,
+                    AlternativeApis = finding.DeveloperGuidance.AlternativeApis,
+                    IsRemediable = finding.DeveloperGuidance.IsRemediable
+                }
+                : null
         }).ToList()
     };
 
@@ -436,12 +440,53 @@ static void OutputJson(string assemblyName, List<ScanFinding> findings)
 
 static Severity? ParseSeverity(string severity)
 {
-    return severity.ToLower() switch
+    return severity.ToLowerInvariant() switch
     {
         "low" => Severity.Low,
         "medium" => Severity.Medium,
         "high" => Severity.High,
         "critical" => Severity.Critical,
+        _ => null
+    };
+}
+
+static ThreatDispositionClassification? ParseDispositionClassification(string classification)
+{
+    return classification.ToLowerInvariant() switch
+    {
+        "clean" => ThreatDispositionClassification.Clean,
+        "suspicious" => ThreatDispositionClassification.Suspicious,
+        "knownthreat" => ThreatDispositionClassification.KnownThreat,
+        "known-threat" => ThreatDispositionClassification.KnownThreat,
+        _ => null
+    };
+}
+
+static ThreatDispositionClassification GetEffectiveDispositionClassification(ScanResultDto schemaResult)
+{
+    var parsed = ParseDispositionClassification(schemaResult.Disposition?.Classification ?? string.Empty);
+    if (parsed.HasValue)
+    {
+        return parsed.Value;
+    }
+
+    if (schemaResult.ThreatFamilies is { Count: > 0 })
+    {
+        return ThreatDispositionClassification.KnownThreat;
+    }
+
+    return schemaResult.Summary.TotalFindings > 0
+        ? ThreatDispositionClassification.Suspicious
+        : ThreatDispositionClassification.Clean;
+}
+
+static ConsoleColor? GetDispositionColor(ThreatDispositionClassification classification)
+{
+    return classification switch
+    {
+        ThreatDispositionClassification.Clean => ConsoleColor.Green,
+        ThreatDispositionClassification.Suspicious => ConsoleColor.Yellow,
+        ThreatDispositionClassification.KnownThreat => ConsoleColor.Red,
         _ => null
     };
 }
@@ -514,7 +559,7 @@ static void OutputInfo(string format)
         Platform = "cli",
         PlatformVersion = GetCliVersion(),
         SchemaVersion = MLVScanVersions.SchemaVersion,
-        CoreVersion = MLVScanVersions.CoreVersion,
+        CoreVersion = MLVScanVersions.CoreVersion
     };
 
     if (string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
@@ -523,7 +568,7 @@ static void OutputInfo(string format)
         {
             WriteIndented = true,
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
         };
 
         Console.WriteLine(JsonSerializer.Serialize(info, jsonOptions));
@@ -567,18 +612,7 @@ static string GetCliVersion()
     return assembly.GetName().Version?.ToString(3) ?? "0.0.0";
 }
 
-sealed class ThreatFamilyConsoleView
-{
-    public string FamilyId { get; set; } = string.Empty;
-    public string DisplayName { get; set; } = string.Empty;
-    public string Summary { get; set; } = string.Empty;
-    public string MatchKind { get; set; } = string.Empty;
-    public double Confidence { get; set; }
-    public bool ExactHashMatch { get; set; }
-    public List<string> MatchedRules { get; set; } = new();
-    public List<string> AdvisorySlugs { get; set; } = new();
-    public List<string> Evidence { get; set; } = new();
-}
+sealed record FindingPair(ScanFinding Finding, FindingDto Dto);
 
 sealed class CliInfo
 {
@@ -588,4 +622,3 @@ sealed class CliInfo
     public string SchemaVersion { get; set; } = string.Empty;
     public string CoreVersion { get; set; } = string.Empty;
 }
-

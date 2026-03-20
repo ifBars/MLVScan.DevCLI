@@ -23,14 +23,16 @@
 
     <AssemblyName>MLVScan.DevCLI</AssemblyName>
     <RootNamespace>MLVScan</RootNamespace>
+    <UseLocalCoreProject Condition="'$(UseLocalCoreProject)' == ''">$(LocalCoreBuild)</UseLocalCoreProject>
+    <UseLocalCoreProject Condition="'$(UseLocalCoreProject)' == '' and Exists('..\MLVScan.Core\MLVScan.Core.csproj')">true</UseLocalCoreProject>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
     
-    <!-- MLVScan.Core: Use NuGet package by default, or local project reference when LocalCoreBuild is set -->
-    <PackageReference Include="MLVScan.Core" Version="1.3.0" Condition="'$(LocalCoreBuild)' != 'true'" />
-    <ProjectReference Include="..\MLVScan.Core\MLVScan.Core.csproj" Condition="'$(LocalCoreBuild)' == 'true'" />
+    <!-- Use the local Core project inside the monorepo unless explicitly overridden. -->
+    <PackageReference Include="MLVScan.Core" Version="1.3.1" Condition="'$(UseLocalCoreProject)' != 'true'" />
+    <ProjectReference Include="..\MLVScan.Core\MLVScan.Core.csproj" Condition="'$(UseLocalCoreProject)' == 'true'" />
   </ItemGroup>
 
   <ItemGroup>
