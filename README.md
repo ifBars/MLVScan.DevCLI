@@ -49,7 +49,7 @@ dotnet build -c Release -p:LocalCoreBuild=true
 
 This switches the reference from the NuGet package to a local project reference at `../MLVScan.Core/MLVScan.Core.csproj`.
 
-**Note:** The NuGet package build requires a published version of MLVScan.Core that includes the DTOs (v1.1.5+). Until then, use `-p:LocalCoreBuild=true` for local development.
+**Note:** The NuGet package build requires a published version of MLVScan.Core that includes the current disposition and DTO contract. Until then, use `-p:LocalCoreBuild=true` for local development.
 
 ## Updating
 
