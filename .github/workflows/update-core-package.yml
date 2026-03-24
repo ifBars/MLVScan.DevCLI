@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   update:
@@ -65,13 +66,27 @@ jobs:
         run: dotnet pack MLVScan.DevCLI.csproj -c Release --no-build
 
       - name: Commit and push if updated
+        id: commit_changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           if git diff --quiet MLVScan.DevCLI.csproj; then
             echo "No updates available"
+            echo "updated=false" >> "$GITHUB_OUTPUT"
           else
+            version=$(grep -oP '<Version>\K[^<]+' MLVScan.DevCLI.csproj)
             git add MLVScan.DevCLI.csproj
-            git commit -m "chore(deps): update MLVScan.Core"
+            git commit -m "chore(deps): update MLVScan.Core and bump DevCLI to ${version}"
             git push
+            echo "updated=true" >> "$GITHUB_OUTPUT"
+            echo "version=${version}" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Trigger auto-release workflow
+        if: steps.commit_changes.outputs.updated == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run auto-release.yml \
+            --ref "${{ github.ref_name }}" \
+            --field version="${{ steps.commit_changes.outputs.version }}"
