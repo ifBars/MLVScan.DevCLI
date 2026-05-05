@@ -290,8 +290,8 @@ Using `--format schema` outputs the standardized MLVScan Schema format:
   },
   "threatFamilies": [
     {
-      "familyId": "family-resource-shell32-tempcmd-v1",
-      "variantId": "resource-shell32-tempcmd-hidden",
+      "familyId": "family-resource-shell32-tempcmd-v2",
+      "variantId": "resource-shell32-tempcmd-shell32",
       "displayName": "Embedded resource ShellExecute temp CMD dropper",
       "summary": "Embedded payload materialized to a temporary .cmd file and launched with hidden native shell execution.",
       "matchKind": "BehaviorVariant",
