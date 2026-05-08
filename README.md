@@ -49,7 +49,7 @@ dotnet build -c Release -p:LocalCoreBuild=true
 
 This switches the reference from the NuGet package to a local project reference at `../MLVScan.Core/MLVScan.Core.csproj`.
 
-**Note:** The NuGet package build requires a published version of MLVScan.Core that includes the current disposition and DTO contract. Until then, use `-p:LocalCoreBuild=true` for local development.
+Inside the MLVScan workspace, the project defaults to the local sibling `MLVScan.Core` checkout when it exists. Use `-p:UseLocalCoreProject=false` when you specifically want to verify the published NuGet package path.
 
 ## Updating
 
@@ -196,7 +196,7 @@ Arguments:
   <assembly-path>  Path to the .dll file to scan
 
 Options:
-  -o, --format <format>   Output format: console (default), json (legacy), schema (MLVScan Schema v1.1.0)
+  -o, --format <format>   Output format: console (default), json (legacy), schema (MLVScan Schema v1.2.0)
   -j, --json              Output results as JSON (legacy format, use --format schema for new format)
   -f, --fail-on <value>   Exit with error code 1 if findings >= severity (Low/Medium/High/Critical)
   -v, --verbose           Show all findings, not just those with developer guidance
@@ -267,11 +267,11 @@ Using `--format schema` outputs the standardized MLVScan Schema format:
 
 ```json
 {
-  "schemaVersion": "1.1.0",
+  "schemaVersion": "1.2.0",
   "metadata": {
-    "coreVersion": "1.1.5",
-    "platformVersion": "1.1.5",
-    "scannerVersion": "1.1.5",
+    "coreVersion": "1.4.1",
+    "platformVersion": "1.2.5",
+    "scannerVersion": "1.2.5",
     "timestamp": "2026-01-29T12:34:56.789Z",
     "scanMode": "developer",
     "platform": "cli"
@@ -339,7 +339,7 @@ Using `--format schema` outputs the standardized MLVScan Schema format:
 }
 ```
 
-This format is compatible with the MLVScan web UI and other ecosystem tools. Schema v1.1.0 also adds optional `callChainId` and `dataFlowChainId` on findings, plus `dataFlows[].callDepth` and `dataFlows[].isSuspicious` when those sections are present.
+This format is compatible with the MLVScan web UI and other ecosystem tools. Schema v1.2.0 includes optional assembly metadata, finding visibility, threat-family evidence, disposition, `callChainId` / `dataFlowChainId`, and deeper `dataFlows[]` summaries when those sections are present.
 
 ## CI/CD Integration Examples
 
@@ -368,7 +368,7 @@ jobs:
         run: dotnet build -c Release
       
       - name: Scan for issues
-        run: mlvscan ./bin/Release/netstandard2.1/MyMod.dll --json > scan-results.json
+        run: mlvscan ./bin/Release/netstandard2.1/MyMod.dll --format schema > scan-results.json
       
       - name: Upload scan results
         uses: actions/upload-artifact@v3
@@ -396,8 +396,8 @@ scan:
   stage: scan
   script:
     - dotnet tool install --global MLVScan.DevCLI
-    - mlvscan ./bin/Release/netstandard2.1/MyMod.dll --json > scan-results.json
-    - mlvscan ./bin/Release/netstandard2.1/MyMod.dll --fail-on Critical
+    - mlvscan ./bin/Release/netstandard2.1/MyMod.dll --format schema > scan-results.json
+    - mlvscan ./bin/Release/netstandard2.1/MyMod.dll --fail-on-disposition Suspicious
   artifacts:
     reports:
       mlvscan: scan-results.json
