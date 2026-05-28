@@ -269,7 +269,7 @@ Using `--format schema` outputs the standardized MLVScan Schema format:
 {
   "schemaVersion": "1.2.0",
   "metadata": {
-    "coreVersion": "1.5.0",
+    "coreVersion": "1.6.0",
     "platformVersion": "1.2.5",
     "scannerVersion": "1.2.5",
     "timestamp": "2026-01-29T12:34:56.789Z",
