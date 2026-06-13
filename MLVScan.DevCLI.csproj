@@ -31,7 +31,7 @@
     <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
     
     <!-- Use the local Core project inside the monorepo unless explicitly overridden. -->
-    <PackageReference Include="MLVScan.Core" Version="1.7.0" Condition="'$(UseLocalCoreProject)' != 'true'" />
+    <PackageReference Include="MLVScan.Core" Version="1.7.1" Condition="'$(UseLocalCoreProject)' != 'true'" />
     <ProjectReference Include="..\MLVScan.Core\MLVScan.Core.csproj" Condition="'$(UseLocalCoreProject)' == 'true'" />
   </ItemGroup>
 
