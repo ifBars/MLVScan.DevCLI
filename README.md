@@ -107,6 +107,16 @@ Show all findings, even those without developer guidance:
 mlvscan MyMod.dll --verbose
 ```
 
+### Deep Analysis
+
+Use larger, still bounded data-flow limits when a standard scan reports incomplete analysis:
+
+```bash
+mlvscan MyMod.dll --scan-mode deep --format schema
+```
+
+The default is `--scan-mode standard`. Use `--scan-mode retry` to run deep analysis only when the first pass exhausts a data-flow limit, or `--scan-mode deep` to use deep budgets from the start. Deep scans can take longer and may still require manual review if a limit is reached. A result that used deep analysis reports `metadata.scanMode` as `deep`.
+
 ### Tool Metadata
 
 Emit machine-readable tool metadata for integrations such as SIMM:
@@ -196,10 +206,11 @@ Arguments:
   <assembly-path>  Path to the .dll file to scan
 
 Options:
-  -o, --format <format>   Output format: console (default), json (legacy), schema (MLVScan Schema v1.2.0)
+  -o, --format <format>   Output format: console (default), json (legacy), schema (MLVScan Schema v1.4.0)
   -j, --json              Output results as JSON (legacy format, use --format schema for new format)
   -f, --fail-on <value>   Exit with error code 1 if findings >= severity (Low/Medium/High/Critical)
   -v, --verbose           Show all findings, not just those with developer guidance
+  --scan-mode <mode>       Analysis mode: standard (default), retry, or deep
   -h, --help              Show help information
   --version               Show version information
 ```
