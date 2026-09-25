@@ -26,7 +26,7 @@ var assemblyPathArgument = new Argument<FileInfo>(
 var formatOption = new Option<string>(
     "--format",
     () => "console",
-    "Output format: console (default), json (legacy), schema (new schema v1.2.0)");
+    $"Output format: console (default), json (legacy), schema (v{MLVScanVersions.SchemaVersion})");
 formatOption.AddAlias("-o");
 
 var jsonOption = new Option<bool>(
@@ -48,6 +48,11 @@ var verboseOption = new Option<bool>(
     "Show advanced diagnostics in addition to default retained findings");
 verboseOption.AddAlias("-v");
 
+var scanModeOption = new Option<string>(
+    "--scan-mode",
+    () => "standard",
+    "Analysis mode: standard (default), retry (deep on bounded work), or deep (all scans)");
+
 var rootCommand = new RootCommand("MLVScan CLI - Scan .NET mod assemblies during development and CI");
 rootCommand.Add(assemblyPathArgument);
 rootCommand.Add(formatOption);
@@ -55,16 +60,17 @@ rootCommand.Add(jsonOption);
 rootCommand.Add(failOnOption);
 rootCommand.Add(failOnDispositionOption);
 rootCommand.Add(verboseOption);
+rootCommand.Add(scanModeOption);
 
 rootCommand.SetHandler(
-    (FileInfo assemblyPath, string format, bool json, string? failOn, string? failOnDisposition, bool verbose) =>
+    (FileInfo assemblyPath, string format, bool json, string? failOn, string? failOnDisposition, bool verbose, string scanMode) =>
     {
         if (json && format == "console")
         {
             format = "json";
         }
 
-        var exitCode = ScanAssembly(assemblyPath, format, failOn, failOnDisposition, verbose);
+        var exitCode = ScanAssembly(assemblyPath, format, failOn, failOnDisposition, verbose, scanMode);
         Environment.Exit(exitCode);
     },
     assemblyPathArgument,
@@ -72,7 +78,8 @@ rootCommand.SetHandler(
     jsonOption,
     failOnOption,
     failOnDispositionOption,
-    verboseOption);
+    verboseOption,
+    scanModeOption);
 
 return await rootCommand.InvokeAsync(args);
 
@@ -81,8 +88,17 @@ static int ScanAssembly(
     string format,
     string? failOn,
     string? failOnDisposition,
-    bool verbose)
+    bool verbose,
+    string scanMode)
 {
+    if (!string.Equals(scanMode, "standard", StringComparison.OrdinalIgnoreCase) &&
+        !string.Equals(scanMode, "retry", StringComparison.OrdinalIgnoreCase) &&
+        !string.Equals(scanMode, "deep", StringComparison.OrdinalIgnoreCase))
+    {
+        Console.Error.WriteLine("Error: --scan-mode must be standard, retry, or deep.");
+        return 1;
+    }
+
     if (!assemblyPath.Exists)
     {
         Console.Error.WriteLine($"Error: File not found: {assemblyPath.FullName}");
@@ -92,11 +108,24 @@ static int ScanAssembly(
     try
     {
         var assemblyBytes = File.ReadAllBytes(assemblyPath.FullName);
-        var config = new ScanConfig { DeveloperMode = true };
+        var config = new ScanConfig
+        {
+            DeveloperMode = true,
+            DeepScanMode = scanMode.ToLowerInvariant() switch
+            {
+                "retry" => DeepScanMode.RetryOnIncomplete,
+                "deep" => DeepScanMode.Always,
+                _ => DeepScanMode.Disabled
+            }
+        };
         var scanner = new AssemblyScanner(RuleFactory.CreateDefaultRules(), config);
         var findings = scanner.Scan(assemblyPath.FullName).ToList();
 
         var options = ScanResultOptions.ForCli(config.DeveloperMode);
+        if (scanner.LastScanUsedDeepAnalysis)
+        {
+            options.ScanMode = "deep";
+        }
         options.PlatformVersion = GetCliVersion();
 
         var schemaResult = ScanResultMapper.ToDto(findings, assemblyPath.Name, assemblyBytes, options);
