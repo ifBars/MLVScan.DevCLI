@@ -1,480 +1,178 @@
 # MLVScan.DevCLI
 
-Developer CLI tool for MLVScan - scan .NET mod assemblies during development with remediation guidance and known malware family verdicts.
+Scan .NET mod assemblies from the command line or during a build. MLVScan reports
+suspicious behavior, known malware families, and guidance for reviewing findings.
 
-## NuGet Publishing
+## Install
 
-The `publish-nuget` job in `.github/workflows/auto-release.yml` uses NuGet trusted
-publishing to obtain a short-lived API key. It does not use the `NUGET_API_KEY`
-repository secret.
+### .NET tool
 
-Configure the trusted publishing policy under the `ifBars` NuGet account with:
-
-- Package owner: `ifBars`
-- Repository owner: `ifBars`
-- Repository: `MLVScan.DevCLI`
-- Workflow file: `auto-release.yml`
-- Environment: leave empty
-- Scope: push only new package versions
-- Package: `MLVScan.DevCLI` (exact match)
-
-The job uploads its `.nupkg` artifact before attempting authentication or publication,
-so a failed upload retains the package for inspection. A successful pack does not
-confirm NuGet publication; check the publishing job and the NuGet package version.
-
-## Installation
-
-### Standalone Binary (Recommended for Desktop Integrations)
-
-Download the latest `mlvscan-win-x64.zip` release asset from GitHub Releases, then run:
-
-```bash
-mlvscan.exe info --format json
-```
-
-### .NET Tool
-
-Install as a global .NET tool:
+Install the CLI globally:
 
 ```bash
 dotnet tool install --global MLVScan.DevCLI
 ```
 
-Or install locally in your project:
-
-```bash
-dotnet new tool-manifest  # if you don't have one already
-dotnet tool install MLVScan.DevCLI
-```
-
-## Building from Source
-
-The DevCLI can be built using either the published NuGet package (default) or a local copy of MLVScan.Core for development.
-
-### Default Build (NuGet Package)
-
-By default, the build uses the published `MLVScan.Core` package from NuGet:
-
-```bash
-dotnet build -c Release
-```
-
-### Local Development Build
-
-To use a local copy of MLVScan.Core (e.g., when developing new features or testing changes):
-
-```bash
-dotnet build -c Release -p:LocalCoreBuild=true
-```
-
-This switches the reference from the NuGet package to a local project reference at `../MLVScan.Core/MLVScan.Core.csproj`.
-
-Inside the MLVScan workspace, the project defaults to the local sibling `MLVScan.Core` checkout when it exists. Use `-p:UseLocalCoreProject=false` when you specifically want to verify the published NuGet package path.
-
-## Updating
-
-If installed as a global .NET tool:
+To update it:
 
 ```bash
 dotnet tool update --global MLVScan.DevCLI
 ```
 
-Or if installed locally in your project:
+For a project-local installation, create a tool manifest if your project does not
+already have one, then install the tool:
 
 ```bash
-dotnet tool update MLVScan.DevCLI
+dotnet new tool-manifest
+dotnet tool install MLVScan.DevCLI
 ```
 
-## Usage
+Run a local installation with `dotnet tool run mlvscan --` followed by the scan
+arguments. Use `dotnet tool restore` after cloning a project with a tool manifest.
 
-### Basic Scan
+### Windows executable
 
-Scan a mod DLL and get developer-friendly output:
+Download `mlvscan-win-x64.zip` from [GitHub Releases](https://github.com/ifBars/MLVScan.DevCLI/releases/latest),
+extract it, and run `mlvscan.exe` from the extracted folder:
+
+```powershell
+.\mlvscan.exe info --format json
+```
+
+## Scan an assembly
 
 ```bash
 mlvscan MyMod.dll
 ```
 
-### JSON Output (for CI/CD)
+The console report shows the overall disposition, findings, and any matched threat
+families. Findings may include remediation advice, documentation links, call
+chains, or data-flow evidence.
 
-Get machine-readable JSON output in legacy format:
-
-```bash
-mlvscan MyMod.dll --json
-```
-
-Or use the new standardized schema format (recommended):
-
-```bash
-mlvscan MyMod.dll --format schema
-```
-
-The schema format follows MLVScan Schema, which keeps the v1 contract but adds richer context such as risk scores, developer-guidance provenance, deeper data-flow metadata, and threat-family evidence fields.
-
-### Fail Build on High Severity
-
-Exit with error code 1 if findings of High or Critical severity are found:
-
-```bash
-mlvscan MyMod.dll --fail-on High
-```
-
-### Verbose Mode
-
-Show all findings, even those without developer guidance:
+Use `--verbose` to include advanced diagnostics:
 
 ```bash
 mlvscan MyMod.dll --verbose
 ```
 
-### Deep Analysis
+### JSON output
 
-Use larger, still bounded data-flow limits when a standard scan reports incomplete analysis:
-
-```bash
-mlvscan MyMod.dll --scan-mode deep --format schema
-```
-
-The default is `--scan-mode standard`. Use `--scan-mode retry` to run deep analysis only when the first pass exhausts a data-flow limit, or `--scan-mode deep` to use deep budgets from the start. Deep scans can take longer and may still require manual review if a limit is reached. A result that used deep analysis reports `metadata.scanMode` as `deep`.
-
-### Tool Metadata
-
-Emit machine-readable tool metadata for integrations such as SIMM:
+Use the schema format for scripts and CI:
 
 ```bash
-mlvscan info --format json
-mlvscan --schema-version
+mlvscan MyMod.dll --format schema > scan-results.json
 ```
 
-## MSBuild Integration
+The report includes `disposition`, `threatFamilies`, `findings`, and scan metadata.
+The legacy JSON format remains available with `--format json` or `--json`.
 
-Add MLVScan checks to your build process by adding this to your `.csproj`:
+### Deeper analysis
 
-Note: The output of the DevCLI may be hidden when using the dotnet CLI. Use an IDE like Visual Studio or Rider to see the full output of the DevCLI.
+If a scan reaches an analysis limit, use `retry` to run deeper analysis when needed:
 
-### Option 1: Post-Build Check (Recommended for Development)
+```bash
+mlvscan MyMod.dll --scan-mode retry --format schema
+```
+
+Use `--scan-mode deep` to apply the larger analysis budgets from the start.
+Deeper scans can take longer and may still need manual review if an analysis
+limit is reached.
+
+## Use in a build
+
+To fail a build when the disposition is `Suspicious` or `KnownThreat`:
+
+```bash
+mlvscan MyMod.dll --fail-on-disposition Suspicious
+```
+
+The command returns exit code `1` when the threshold is met. Without a failure
+threshold, a completed scan returns `0` even if it reports findings. Scan errors
+also return `1`.
+
+For workflows that use finding severity, `--fail-on High` fails on `High` or
+`Critical` findings.
+
+### MSBuild
+
+Install MLVScan as a local tool in your project, then add this target to your
+`.csproj`:
 
 ```xml
 <Target Name="MLVScanCheck" AfterTargets="Build">
-  <Exec Command="dotnet tool run mlvscan -- $(TargetPath)" />
+  <Exec Command="dotnet tool run mlvscan -- &quot;$(TargetPath)&quot; --fail-on-disposition Suspicious" />
 </Target>
 ```
 
-### Option 2: Fail Build on Issues
-
-```xml
-<Target Name="MLVScanCheck" AfterTargets="Build">
-  <Exec Command="dotnet tool run mlvscan -- $(TargetPath) --fail-on High" />
-</Target>
-```
-
-### Option 3: JSON Output for CI/CD
-
-```xml
-<Target Name="MLVScanCheck" AfterTargets="Build">
-  <Exec Command="dotnet tool run mlvscan -- $(TargetPath) --format schema > mlvscan-report.json" />
-</Target>
-```
-
-Note: Use `--format schema` for the standardized output format, or `--json` for the legacy format.
-
-## Complete Example Project Configuration
-
-Here's a complete example of a mod project with MLVScan integration:
-
-```xml
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <TargetFramework>netstandard2.1</TargetFramework>
-    <AssemblyName>MyAwesomeMod</AssemblyName>
-  </PropertyGroup>
-
-  <!-- Your mod dependencies -->
-  <ItemGroup>
-    <PackageReference Include="MelonLoader" Version="0.6.1" />
-  </ItemGroup>
-
-  <!-- MLVScan Developer Tool -->
-  <ItemGroup>
-    <PackageReference Include="MLVScan.DevCLI" Version="1.0.0">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
-    </PackageReference>
-  </ItemGroup>
-
-  <!-- Run MLVScan after every build -->
-  <Target Name="MLVScanCheck" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug'">
-    <Exec Command="dotnet tool run mlvscan -- &quot;$(TargetPath)&quot;" 
-          ContinueOnError="true" 
-          IgnoreExitCode="true" />
-  </Target>
-
-  <!-- Fail release builds if critical issues found -->
-  <Target Name="MLVScanCheckRelease" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
-    <Exec Command="dotnet tool run mlvscan -- &quot;$(TargetPath)&quot; --fail-on Critical" />
-  </Target>
-</Project>
-```
-
-## Command-Line Options
-
-```
-Usage:
-  mlvscan <assembly-path> [options]
-
-Arguments:
-  <assembly-path>  Path to the .dll file to scan
-
-Options:
-  -o, --format <format>   Output format: console (default), json (legacy), schema (MLVScan Schema v1.4.0)
-  -j, --json              Output results as JSON (legacy format, use --format schema for new format)
-  -f, --fail-on <value>   Exit with error code 1 if findings >= severity (Low/Medium/High/Critical)
-  -v, --verbose           Show all findings, not just those with developer guidance
-  --scan-mode <mode>       Analysis mode: standard (default), retry, or deep
-  -h, --help              Show help information
-  --version               Show version information
-```
-
-## Output Examples
-
-### Console Output
-
-```
-MLVScan Developer Report
-========================
-Assembly: MyMod.dll
-Findings: 2
-
-Known malware family match
-Family: Embedded resource ShellExecute temp CMD dropper
-Match: BehaviorVariant
-Confidence: 99%
-Summary: Embedded payload materialized to a temporary .cmd file and launched with hidden native shell execution.
-Matched Rules: DllImportRule
-
-[High] Detected executable write near persistence-prone directory
-  Rule: PersistenceRule
-  Occurrences: 1
-
-  Developer Guidance:
-  For mod settings, use MelonPreferences. For save data, use the game's
-  save system or Application.persistentDataPath with .json extension.
-  📚 https://melonwiki.xyz/#/modders/preferences
-  Suggested APIs: MelonPreferences.CreateEntry<T>
-
-  Locations:
-    • MyMod.SaveManager.SaveSettings:42
-
-─────────────────────────────────────────
-```
-
-### JSON Output (Legacy)
-
-```json
-{
-  "assemblyName": "MyMod.dll",
-  "totalFindings": 2,
-  "findings": [
-    {
-      "ruleId": "PersistenceRule",
-      "description": "Detected executable write near persistence-prone directory",
-      "severity": "High",
-      "location": "MyMod.SaveManager.SaveSettings:42",
-      "codeSnippet": "...",
-      "guidance": {
-        "remediation": "For mod settings, use MelonPreferences...",
-        "documentationUrl": "https://melonwiki.xyz/#/modders/preferences",
-        "alternativeApis": ["MelonPreferences.CreateEntry<T>"],
-        "isRemediable": true
-      }
-    }
-  ]
-}
-```
-
-### Schema Output (New, Recommended)
-
-Using `--format schema` outputs the standardized MLVScan Schema format:
-
-```json
-{
-  "schemaVersion": "1.2.0",
-  "metadata": {
-    "coreVersion": "1.6.0",
-    "platformVersion": "1.2.5",
-    "scannerVersion": "1.2.5",
-    "timestamp": "2026-01-29T12:34:56.789Z",
-    "scanMode": "developer",
-    "platform": "cli"
-  },
-  "input": {
-    "fileName": "MyMod.dll",
-    "sizeBytes": 45678,
-    "sha256Hash": "a1b2c3d4..."
-  },
-  "summary": {
-    "totalFindings": 2,
-    "countBySeverity": {
-      "High": 2
-    },
-    "triggeredRules": ["PersistenceRule"]
-  },
-  "threatFamilies": [
-    {
-      "familyId": "family-resource-shell32-tempcmd-v2",
-      "variantId": "resource-shell32-tempcmd-shell32",
-      "displayName": "Embedded resource ShellExecute temp CMD dropper",
-      "summary": "Embedded payload materialized to a temporary .cmd file and launched with hidden native shell execution.",
-      "matchKind": "BehaviorVariant",
-      "confidence": 0.99,
-      "exactHashMatch": false,
-      "matchedRules": ["DllImportRule"],
-      "advisorySlugs": ["2025-12-malware-customtv-il2cpp"],
-      "evidence": [
-        {
-          "kind": "api",
-          "value": "ShellExecuteEx"
-        }
-      ]
-    }
-  ],
-  "findings": [
-    {
-      "id": "f1a2b3c4d5e6",
-      "ruleId": "PersistenceRule",
-      "description": "Detected executable write near persistence-prone directory",
-      "severity": "High",
-      "location": "MyMod.SaveManager.SaveSettings:42",
-      "codeSnippet": "...",
-      "riskScore": 72,
-      "developerGuidance": {
-        "ruleId": "PersistenceRule",
-        "ruleIds": ["PersistenceRule"],
-        "remediation": "For mod settings, use MelonPreferences...",
-        "documentationUrl": "https://melonwiki.xyz/#/modders/preferences",
-        "alternativeApis": ["MelonPreferences.CreateEntry<T>"],
-        "isRemediable": true
-      }
-    }
-  ],
-  "developerGuidance": [
-    {
-      "ruleId": "PersistenceRule",
-      "ruleIds": ["PersistenceRule"],
-      "remediation": "For mod settings, use MelonPreferences...",
-      "documentationUrl": "https://melonwiki.xyz/#/modders/preferences",
-      "alternativeApis": ["MelonPreferences.CreateEntry<T>"],
-      "isRemediable": true
-    }
-  ]
-}
-```
-
-This format is compatible with the MLVScan web UI and other ecosystem tools. Schema v1.2.0 includes optional assembly metadata, finding visibility, threat-family evidence, disposition, `callChainId` / `dataFlowChainId`, and deeper `dataFlows[]` summaries when those sections are present.
-
-## CI/CD Integration Examples
+Run `dotnet tool restore` before building on a new machine or in CI.
 
 ### GitHub Actions
 
+This example builds a project and scans its assembly. Replace `MyMod.csproj` and
+the DLL path with your project's paths.
+
 ```yaml
-name: Build and Scan
+name: Build and scan
 
 on: [push, pull_request]
 
 jobs:
-  build:
-    runs-on: windows-latest
+  scan:
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v3
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '8.0.x'
-      
-      - name: Install MLVScan.DevCLI
+      - name: Install MLVScan
         run: dotnet tool install --global MLVScan.DevCLI
-      
       - name: Build
-        run: dotnet build -c Release
-      
-      - name: Scan for issues
-        run: mlvscan ./bin/Release/netstandard2.1/MyMod.dll --format schema > scan-results.json
-      
-      - name: Upload scan results
-        uses: actions/upload-artifact@v3
+        run: dotnet build MyMod.csproj -c Release
+      - name: Scan
+        run: mlvscan ./bin/Release/netstandard2.1/MyMod.dll --format schema --fail-on-disposition Suspicious > scan-results.json
+      - name: Save report
+        if: always()
+        uses: actions/upload-artifact@v6
         with:
-          name: mlvscan-results
+          name: scan-results
           path: scan-results.json
 ```
 
-### GitLab CI
+## Command reference
 
-```yaml
-stages:
-  - build
-  - scan
-
-build:
-  stage: build
-  script:
-    - dotnet build -c Release
-  artifacts:
-    paths:
-      - bin/Release/
-
-scan:
-  stage: scan
-  script:
-    - dotnet tool install --global MLVScan.DevCLI
-    - mlvscan ./bin/Release/netstandard2.1/MyMod.dll --format schema > scan-results.json
-    - mlvscan ./bin/Release/netstandard2.1/MyMod.dll --fail-on-disposition Suspicious
-  artifacts:
-    reports:
-      mlvscan: scan-results.json
+```text
+mlvscan <assembly-path> [options]
+mlvscan info [--format text|json]
+mlvscan --schema-version
 ```
 
-## Understanding the Output
+| Option | Behavior |
+| --- | --- |
+| `--format`, `-o` | Output `console` (default), `schema`, or legacy `json`. |
+| `--json`, `-j` | Use legacy JSON output. |
+| `--fail-on-disposition` | Return `1` at or above `Clean`, `Suspicious`, or `KnownThreat`. |
+| `--fail-on`, `-f` | Return `1` at or above `Low`, `Medium`, `High`, or `Critical` severity. |
+| `--verbose`, `-v` | Include advanced diagnostics. |
+| `--scan-mode` | Use `standard` (default), `retry`, or `deep` analysis. |
+| `--help`, `-h` | Show command help. |
+| `--version` | Show the CLI version. |
 
-### Severity Levels
+## Review a result
 
-- **Critical**: Serious security violations (e.g., shell execution, Discord webhooks)
-- **High**: Potentially dangerous patterns (e.g., registry access, DLL imports)
-- **Medium**: Suspicious patterns that may be legitimate (e.g., encoded strings)
-- **Low**: Informational findings (e.g., Base64 usage)
+Start with the disposition and any threat-family matches, then read the supporting
+findings. Severity describes individual findings; it is not the overall verdict.
+Review incomplete analysis and uncertain findings before deciding what to do
+with an assembly.
 
-### Developer Guidance
-
-Each finding may include:
-- **Remediation**: Specific advice on how to fix the issue
-- **Documentation URL**: Link to relevant MelonLoader documentation
-- **Alternative APIs**: Suggested safe APIs to use instead
-- **IsRemediable**: Whether a safe alternative exists
-
-If `IsRemediable` is `false`, the pattern has no safe alternative and should not be used in MelonLoader mods.
-
-## FAQ
-
-### Q: Will this slow down my build?
-
-A: The scan typically takes 1-2 seconds for most mods. You can disable it in Debug builds or use `ContinueOnError="true"` to make it non-blocking.
-
-### Q: What if I get false positives?
-
-A: The developer guidance will help you understand why something was flagged and how to fix it. If you believe it's a legitimate false positive, you can:
-1. Refactor your code using the suggested alternatives
-2. Contact the MLVScan maintainers in the Discord
-3. Add your mod's hash to the whitelist after community review
-
-### Q: Can I use this for closed-source mods?
-
-A: Yes! The tool works on compiled DLLs and doesn't require source code access.
+The CLI scans compiled assemblies, so source code is not required. If you suspect
+a false positive, report it with the scan output and enough context to explain
+the assembly's intended behavior.
 
 ## Support
 
-- **Discord**: https://discord.gg/UD4K4chKak
-- **GitHub**: Report issues and suggestions
+- [Report an issue](https://github.com/ifBars/MLVScan.DevCLI/issues)
+- [Join the Discord](https://discord.gg/UD4K4chKak)
 
 ## License
 
-GPL-3.0 License - See [LICENSE] file for details
+[GPL-3.0-or-later](LICENSE).
