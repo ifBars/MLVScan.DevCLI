@@ -2,6 +2,26 @@
 
 Developer CLI tool for MLVScan - scan .NET mod assemblies during development with remediation guidance and known malware family verdicts.
 
+## NuGet Publishing
+
+The `publish-nuget` job in `.github/workflows/auto-release.yml` uses NuGet trusted
+publishing to obtain a short-lived API key. It does not use the `NUGET_API_KEY`
+repository secret.
+
+Configure the trusted publishing policy under the `ifBars` NuGet account with:
+
+- Package owner: `ifBars`
+- Repository owner: `ifBars`
+- Repository: `MLVScan.DevCLI`
+- Workflow file: `auto-release.yml`
+- Environment: leave empty
+- Scope: push only new package versions
+- Package: `MLVScan.DevCLI` (exact match)
+
+The job uploads its `.nupkg` artifact before attempting authentication or publication,
+so a failed upload retains the package for inspection. A successful pack does not
+confirm NuGet publication; check the publishing job and the NuGet package version.
+
 ## Installation
 
 ### Standalone Binary (Recommended for Desktop Integrations)
