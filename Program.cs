@@ -234,6 +234,12 @@ static void OutputConsole(ScanResultDto schemaResult, List<FindingDto> findings,
     OutputDispositionSummary(schemaResult);
     OutputThreatFamilySummary(schemaResult);
 
+    if (schemaResult.Findings.Any(finding => finding.RuleId == "ValueResolutionBudget"))
+    {
+        Console.WriteLine("Some process values reached a recovery limit. Use --scan-mode deep for larger finite budgets, or --scan-mode retry to retry automatically when limits are reached. Deep analysis can still leave values unresolved.");
+        Console.WriteLine();
+    }
+
     if (findings.Count == 0)
     {
         Console.WriteLine(advancedCount > 0 && !verbose
@@ -241,6 +247,11 @@ static void OutputConsole(ScanResultDto schemaResult, List<FindingDto> findings,
             : "No retained findings.");
         return;
     }
+
+    Console.WriteLine("Review findings in context: an API or severity alone is not the final verdict.");
+    Console.WriteLine("Guidance describes optional approaches where they preserve your application's behavior.");
+    Console.WriteLine("For a suspected false positive, share a --format schema report, scanner version, and relevant code with the maintainer.");
+    Console.WriteLine();
 
     var groupedByRule = findings
         .Where(static finding => finding.RuleId != null)
@@ -250,12 +261,12 @@ static void OutputConsole(ScanResultDto schemaResult, List<FindingDto> findings,
 
     foreach (var ruleGroup in groupedByRule)
     {
-        var firstFinding = ruleGroup.First();
+        var firstFinding = ruleGroup.OrderByDescending(static finding => ParseSeverity(finding.Severity) ?? Severity.Low).First();
         var count = ruleGroup.Count();
 
         Console.WriteLine($"[{firstFinding.Severity}] {firstFinding.Description}");
         Console.WriteLine($"  Rule: {firstFinding.RuleId}");
-        Console.WriteLine($"  Occurrences: {count}");
+        Console.WriteLine($"  Findings: {count}");
 
         if (firstFinding.DeveloperGuidance != null)
         {
@@ -274,13 +285,17 @@ static void OutputConsole(ScanResultDto schemaResult, List<FindingDto> findings,
 
             if (firstFinding.DeveloperGuidance.AlternativeApis is { Length: > 0 })
             {
-                Console.WriteLine($"  Suggested APIs: {string.Join(", ", firstFinding.DeveloperGuidance.AlternativeApis)}");
+                Console.WriteLine("  Optional APIs / approaches (check target-runtime support):");
+                foreach (var alternative in firstFinding.DeveloperGuidance.AlternativeApis)
+                {
+                    Console.WriteLine($"    - {alternative}");
+                }
             }
 
             if (!firstFinding.DeveloperGuidance.IsRemediable)
             {
                 Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.WriteLine("  Warning: No safe alternative - this pattern should not be used");
+                Console.WriteLine("  No general API replacement is suggested; review the behavior and evidence.");
                 Console.ResetColor();
             }
         }
@@ -296,7 +311,7 @@ static void OutputConsole(ScanResultDto schemaResult, List<FindingDto> findings,
         if (firstFinding.CallChain != null)
         {
             Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine("  Call Chain (Attack Path):");
+            Console.WriteLine("  Call Chain:");
             Console.ResetColor();
 
             foreach (var node in firstFinding.CallChain.Nodes)
@@ -340,15 +355,16 @@ static void OutputConsole(ScanResultDto schemaResult, List<FindingDto> findings,
 
         if (firstFinding.CallChain == null && firstFinding.DataFlowChain == null)
         {
+            var locations = ruleGroup.Select(static finding => finding.Location).Distinct(StringComparer.Ordinal).ToList();
             Console.WriteLine("  Locations:");
-            foreach (var finding in ruleGroup.Take(3))
+            foreach (var location in locations.Take(3))
             {
-                Console.WriteLine($"    - {finding.Location}");
+                Console.WriteLine($"    - {location}");
             }
 
-            if (count > 3)
+            if (locations.Count > 3)
             {
-                Console.WriteLine($"    ... and {count - 3} more");
+                Console.WriteLine($"    ... and {locations.Count - 3} more");
             }
         }
 

@@ -49,6 +49,20 @@ The console report shows the overall disposition, findings, and any matched thre
 families. Findings may include remediation advice, documentation links, call
 chains, or data-flow evidence.
 
+Start with the disposition and **Blocking Recommended** value. Findings are supporting
+evidence; neither a sensitive API nor its raw severity means the implementation must
+be rewritten. `Suspicious` with `blockingRecommended: false` requests review without
+recommending a block. Verified restart flows can receive this advisory result while
+their process-execution findings remain visible.
+
+Developer guidance offers optional APIs or workflows when they preserve the required
+behavior. Check target-runtime support. For example, a direct executable launch is
+not a drop-in replacement for a Steam URI or a helper that waits for shutdown. Native
+interop, encoding, file I/O, and dynamic loading can all be legitimate. If the behavior
+is necessary and misclassified, share the schema report, scanner version, and relevant
+source with the maintainer so detection can improve. Do not rewrite code solely to
+silence a rule. Review reports for private paths or URLs before sharing them.
+
 Use `--verbose` to include advanced diagnostics:
 
 ```bash
@@ -74,7 +88,7 @@ If a scan reaches an analysis limit, use `retry` to run deeper analysis when nee
 mlvscan MyMod.dll --scan-mode retry --format schema
 ```
 
-Use `--scan-mode deep` to apply the larger analysis budgets from the start.
+Use `--scan-mode deep` to apply the larger analysis budgets from the start. These include process value recovery work, depth, and alternative limits. When recovery reaches a limit, the console shows a retry hint and `--verbose` / schema output includes the `ValueResolutionBudget` diagnostic. Recovered candidates remain available to detection; unresolved values are not treated as safe. Deep mode is still finite and cannot recover every runtime value.
 Deeper scans can take longer and may still need manual review if an analysis
 limit is reached.
 
@@ -89,6 +103,12 @@ mlvscan MyMod.dll --fail-on-disposition Suspicious
 The command returns exit code `1` when the threshold is met. Without a failure
 threshold, a completed scan returns `0` even if it reports findings. Scan errors
 also return `1`.
+
+This classification threshold also fails for advisory `Suspicious` results, even when
+`blockingRecommended` is `false`. It is intentionally stricter than the loader's
+blocking recommendation. Automation that follows that recommendation should consume
+`disposition.blockingRecommended` from `--format schema` instead. Exit semantics have
+not changed.
 
 For workflows that use finding severity, `--fail-on High` fails on `High` or
 `Critical` findings.
