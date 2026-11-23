@@ -152,6 +152,9 @@ static int ScanAssembly(
                 break;
         }
 
+        // Applicability is outside the severity and disposition thresholds.
+        if (schemaResult.Disposition?.Classification == "NotApplicable") return 0;
+
         if (!string.IsNullOrWhiteSpace(failOnDisposition))
         {
             var failClassification = ParseDispositionClassification(failOnDisposition);
@@ -382,7 +385,7 @@ static void OutputDispositionSummary(ScanResultDto schemaResult)
     }
 
     var classification = GetEffectiveDispositionClassification(schemaResult);
-    var color = GetDispositionColor(classification);
+    var color = schemaResult.Disposition.Classification == "NotApplicable" ? null : GetDispositionColor(classification);
     if (color.HasValue)
     {
         Console.ForegroundColor = color.Value;
